@@ -3,13 +3,13 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from .config import load_settings
 from .models import (
     LayerCreate, LayerTypeCreate, MappingCreate, NodeCreate, OntologyBundle,
-    QueryRequest, RelationTypeCreate, ShortcutCreate,
+    QueryRequest, RelationTypeCreate, SchemaApprovalRequest, ShortcutCreate,
 )
 from .runtime import engine
 from .processing import KnowledgeProcessor
@@ -50,6 +50,19 @@ class LayerMappingRequest(BaseModel):
     target_layer_ids: list[str] = Field(min_length=1)
     per_target: int = Field(default=4, ge=1, le=20)
     accept: bool = False
+
+
+class SchemaDiscoveryRequest(BaseModel):
+    source_layer_ids: list[str] = Field(min_length=1)
+    namespace: str = Field(pattern=r"^[a-z][a-z0-9_-]*$")
+    sample_limit: int = Field(default=24, ge=4, le=32)
+    max_chars_per_node: int = Field(default=4000, ge=200, le=4000)
+
+
+class SchemaCleaningRequest(BaseModel):
+    discovery_id: str
+    source_node_ids: list[str] | None = None
+    max_nodes: int = Field(default=24, ge=1, le=32)
 
 
 @app.get("/status")
@@ -95,6 +108,35 @@ def import_ontology(item: OntologyBundle):
     return engine().repository.import_ontology(item)
 
 
+@app.get("/ontology/schema-discoveries")
+def list_schema_discoveries(status: str | None = None):
+    return engine().repository.schema_discoveries(status)
+
+
+@app.get("/ontology/schema-discoveries/{discovery_id}")
+def get_schema_discovery(discovery_id: str):
+    found = engine().repository.schema_discovery(discovery_id)
+    if not found:
+        raise HTTPException(status_code=404, detail="Schema discovery not found")
+    return found
+
+
+@app.post("/ontology/schema-discoveries/{discovery_id}/approve")
+def approve_schema_discovery(discovery_id: str, item: SchemaApprovalRequest):
+    try:
+        return engine().repository.approve_schema_discovery(discovery_id, item.candidate_keys)
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+
+
+@app.post("/ontology/schema-discoveries/{discovery_id}/reject")
+def reject_schema_discovery(discovery_id: str):
+    try:
+        return engine().repository.reject_schema_discovery(discovery_id)
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+
+
 @app.post("/nodes")
 def create_node(item: NodeCreate):
     return {"id": engine().create_node(item)}
@@ -129,6 +171,24 @@ def derive_layer(item: AbstractionRequest):
 def map_layers(item: LayerMappingRequest):
     return KnowledgeProcessor(engine()).map_layers(
         item.reference_layer_ids, item.target_layer_ids, item.per_target, item.accept)
+
+
+@app.post("/process/discover-schema")
+def discover_schema(item: SchemaDiscoveryRequest):
+    try:
+        return KnowledgeProcessor(engine()).discover_schema(
+            item.source_layer_ids, item.namespace, item.sample_limit, item.max_chars_per_node)
+    except (RuntimeError, ValueError) as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+
+
+@app.post("/process/clean-with-schema")
+def clean_with_schema(item: SchemaCleaningRequest):
+    try:
+        return KnowledgeProcessor(engine()).clean_with_schema(
+            item.discovery_id, item.source_node_ids, item.max_nodes)
+    except (RuntimeError, ValueError) as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
 
 
 @app.post("/shortcuts")

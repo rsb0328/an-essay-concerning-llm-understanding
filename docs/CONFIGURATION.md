@@ -16,6 +16,10 @@ mappings. See [Extensible domain ontologies](ONTOLOGIES.md).
 
 If URL or model is empty, generation is disabled. In that mode, imports, mappings, vector search, graph traversal, shortcut routing, shortcut learning, and evidence output remain available; model-assisted transformation, ontology-constrained classification, and prose answers do not.
 
+Pre-cleaning schema discovery and schema-guided cleaning require a generation model because both inspect content
+and return structured proposals or routed units. They are bounded batch operations; sampling and character limits
+are request parameters rather than global settings.
+
 The endpoint should support `/chat/completions` and ideally strict JSON Schema output. Some nominally compatible servers ignore `response_format`; adapter contributions may add provider-specific handling without moving task logic into the adapter.
 
 ## Embeddings

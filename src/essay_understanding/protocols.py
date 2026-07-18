@@ -19,3 +19,18 @@ unknown namespaced type for human review; never silently create a graph edge. Re
 SHORTCUT_SYSTEM = """Summarize a successful retrieval route as a reusable, bounded procedure.
 Do not store the answer. Store where to begin, which relations to follow, depth, breadth, stop conditions,
 failure conditions, and validators. Return only schema-valid JSON."""
+
+SCHEMA_DISCOVERY_SYSTEM = """You are performing a preliminary schema survey before semantic cleaning.
+Inspect the representative raw-input sample and the active workspace ontology. Propose only distinctions that
+materially change independent retrieval, identity, lifecycle, access, validation, or cross-item mapping.
+Classify each proposal as one of: layer_type (independent retrieval context), node_type (stable semantic unit),
+attribute (scalar or structured descriptor), or relation_type (verifiable link between units). Do not turn every
+topic, wording variant, or value into a new layer. Prefer an existing type when it already covers the distinction.
+All new IDs must use the requested namespace. Include rationale and observed examples. This is a proposal only:
+the application compares it with the registry and requires approval before activation. Return schema-valid JSON."""
+
+SCHEMA_CLEANING_SYSTEM = """Clean and route raw input using only the approved active ontology and the approved
+schema discovery guidance. Produce concise canonical units, assign each to an active layer type and active node
+type, preserve exact source node IDs, and use only registered attribute IDs and relation IDs. Do not invent missing
+facts or silently add schema. Keep values as attributes when they do not need independent identity. Return only
+schema-valid JSON."""

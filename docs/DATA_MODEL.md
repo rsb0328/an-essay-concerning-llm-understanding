@@ -19,6 +19,8 @@ narrative analysis are ontology packs or workspaces built on the same storage an
 - **Shortcut**: a retrieval plan with starting layers, relation filters, depth, breadth, stopping rules, validators,
   failure conditions, maturity, reliability, history, and version.
 - **Query run**: an auditable observation of mode, depth, evidence, shortcut use, latency, and output.
+- **Schema discovery**: an auditable pre-cleaning survey containing representative source IDs, candidate layer/node/
+  attribute/relation dimensions, comparisons with the active ontology, cleaning guidance, and approval status.
 
 ## Derived objects
 
@@ -31,6 +33,10 @@ namespace, so shortcut-first routing is a real retrieval stage rather than hidde
 The core ships only structural types needed by the engine. A workspace imports or registers its vocabulary before
 creating domain layers and mappings. Unknown types fail closed. Model-suggested unknown relations are returned as
 proposals for review and are not written automatically. See [Extensible domain ontologies](ONTOLOGIES.md).
+
+Unknown datasets can first enter the neutral input layer and use [schema discovery](SCHEMA_DISCOVERY.md). Approved
+node types and attributes live in the semantic-dimension registry; approved layer and relation types enter their
+existing registries. Discovery records remain exportable audit objects.
 
 ## Mathematical retrieval model
 
@@ -87,5 +93,5 @@ default, not a universal cognitive claim.
 
 ## Portability
 
-`GET /export` and `essay-understanding export` return the ontology registry, layers, nodes, mappings, and shortcuts
-without vectors. The format identifier is `essay-understanding-memory-v1`.
+`GET /export` and `essay-understanding export` return the ontology registry, schema discoveries, layers, nodes,
+mappings, and shortcuts without vectors. The format identifier is `essay-understanding-memory-v1`.

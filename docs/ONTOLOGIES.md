@@ -33,6 +33,9 @@ essay-understanding ontology-import ontologies/company.example.json
 Or post the same JSON to `POST /ontology/import`. `GET /ontology` returns the active registry. The repository's
 company and philosophy files are examples, not mandatory schemas; a new domain should use its own namespace.
 
+When the vocabulary is not known in advance, admit material to a neutral input layer and run the governed
+[schema-discovery workflow](SCHEMA_DISCOVERY.md). Its LLM suggestions remain pending until approval.
+
 ## Model behavior
 
 A configured generation model receives the active ontology. It may select an active relation, return `unrelated`,
