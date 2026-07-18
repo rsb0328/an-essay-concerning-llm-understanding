@@ -2,7 +2,7 @@
 
 *A model-agnostic, domain-extensible multi-layer vector storage and retrieval system with explicit mappings and a peer shortcut layer—its title being a deliberate nod to John Locke.*
 
-[中文说明](README.zh-CN.md) · [Schema discovery](docs/SCHEMA_DISCOVERY.md) · [Research data](research/) · [Scaling study](research/SCALING_STUDY.md) · [Configuration](docs/CONFIGURATION.md) · [Data model and mathematics](docs/DATA_MODEL.md) · [Ontologies](docs/ONTOLOGIES.md)
+[中文说明](README.zh-CN.md) · [Schema discovery](docs/SCHEMA_DISCOVERY.md) · [Abstraction readiness](docs/ABSTRACTION_READINESS.md) · [Research data](research/) · [Scaling study](research/SCALING_STUDY.md) · [Configuration](docs/CONFIGURATION.md) · [Data model and mathematics](docs/DATA_MODEL.md) · [Ontologies](docs/ONTOLOGIES.md)
 
 > **Alpha research software.** The architecture runs and its core invariants are tested, but the current evidence does not establish that layered retrieval is generally faster or more accurate than flat vector search. The repository is published to make that hypothesis testable, not to present it as settled.
 
@@ -172,6 +172,14 @@ When users do not know the domain structure in advance, material first enters th
 
 Candidates are compared only with active definitions of the same kind and stored as a pending discovery. Exact matches are reused; possible semantic overlaps require explicit selection; nothing is activated by the survey itself. After approval, schema-guided cleaning validates every target layer, node type, attribute, relation, and source pointer before routing derived units into peer layers. See [Schema discovery](docs/SCHEMA_DISCOVERY.md).
 
+Model-assisted abstraction is allowed only after a configurable corpus-size gate (`N ≥ 12` and either `C ≥ 24,000`
+characters or `N ≥ 50` short records by default). A new candidate must then repeat across two differently sampled
+surveys before activation. These are conservative Alpha defaults, not universal statistical laws. The first input
+layer is marked as the historical origin, but the marker creates neither a permanent semantic root nor retrieval
+priority. External material gets an auditable placement proposal: same-source continuations may append, independent
+sources or viewpoints default to peer layers, and machine abstractions remain in derived layers. See
+[Abstraction readiness and material placement](docs/ABSTRACTION_READINESS.md).
+
 ## How information is stored
 
 “Library → layers → data inside each layer” is the correct backbone, but not the whole topology. The workspace is a container, not a privileged semantic root. Knowledge layers are peers; nodes belong to layers; mappings cross nodes and layers; the shortcut layer is parallel procedural memory; ontology and audit records govern or describe the content rather than belonging to one knowledge layer.
@@ -185,7 +193,7 @@ flowchart TB
     O --> OT3["Relation types and traversal weights"]
 
     W --> K["Canonical knowledge"]
-    K --> L1["Knowledge layer A"]
+    K --> L1["Historical initial input layer A"]
     K --> L2["Knowledge layer B"]
     K --> LN["Knowledge layer …"]
     L1 --> N1["Nodes: content, type, attributes, provenance, maturity"]
@@ -198,7 +206,8 @@ flowchart TB
     P --> PR["Triggers, starting layers, relation filters, budgets, stop rules, history"]
 
     W --> A["Audit and evolution records"]
-    A --> A1["Schema discoveries and decisions"]
+    A --> A1["Schema discoveries, readiness, survey rounds"]
+    A --> A4["External / derived material placement plans"]
     A --> A2["Query paths and outcomes"]
     A --> A3["Shortcut success, failure, version, retirement"]
 
@@ -215,7 +224,7 @@ flowchart LR
     APP["Application backend"] --> DB["SQLite: knowledge.db"]
     DB --> T1["Ontology tables"]
     DB --> T2["layers / nodes / mappings"]
-    DB --> T3["shortcuts / schema discoveries / query history"]
+    DB --> T3["shortcuts / schema discoveries / placement plans / query history"]
 
     APP --> VS{"Selected vector backend"}
     VS --> SV["SQLite vectors table: default / small scale"]
@@ -238,8 +247,12 @@ The original ideas are implemented as ordinary application logic and data—not 
 ```mermaid
 flowchart TD
     A["Unknown raw input"] --> B["Neutral input layer; preserve provenance"]
-    B --> SD["LLM schema survey"]
-    SD --> O["Compare, review, and approve ontology changes"]
+    B --> R{"Enough evidence for abstraction?"}
+    R -->|"no"| B
+    R -->|"yes"| SD["Rotating-sample LLM schema survey"]
+    SD --> O["Compare, repeat, review, and approve ontology changes"]
+    B --> PP["Propose and approve material placement"]
+    PP --> C
     O --> C["Clean and route into peer layers"]
     C --> D["Build a replaceable vector index"]
     D --> E["Optional abstraction or cross-layer comparison"]
@@ -259,11 +272,15 @@ flowchart TD
 
 ### 1. Neutral admission and schema discovery
 
-Known workspaces may import an ontology directly. Unknown material enters a neutral input layer, is sampled, and receives a bounded model-assisted schema survey. Proposed layer, node, attribute, and relation dimensions remain pending.
+Known workspaces may import an ontology directly. Unknown material enters a neutral input layer. Its historically
+first input layer is marked `is_initial` for provenance only. The system checks abstraction readiness before a
+bounded model-assisted schema survey. Proposed layer, node, attribute, and relation dimensions remain pending.
 
 ### 2. Comparison and approval
 
-Candidates are compared with the active registry. Exact matches are reused, possible overlaps are flagged, and novel candidates require approval. Discovery never changes the ontology automatically.
+Candidates are compared with the active registry. Exact matches are reused, possible overlaps are flagged, and
+novel candidates must recur across differently sampled surveys before approval. Discovery never changes the
+ontology automatically.
 
 ### 3. Schema-guided cleaning and peer-layer creation
 
@@ -279,7 +296,9 @@ An embedding provider creates search candidates. The model name and vector dimen
 
 ### 6. Human-supplied and machine-derived layers
 
-Externally supplied knowledge retains its author, system, and source. Model-derived units remain a separate layer and link back to exact inputs. Depending on the workspace they may be entities, events, requirements, observations, claims, or other registered units.
+Externally supplied knowledge retains its author, system, and source. A validated placement plan decides whether it
+is a same-source continuation, an independent peer layer, link-only material, or unresolved. Model-derived units
+remain in a derived layer and link back to exact inputs; they are never written into the historical initial source.
 
 ### 7. Candidate comparison
 

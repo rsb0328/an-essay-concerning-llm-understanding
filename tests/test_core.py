@@ -13,7 +13,7 @@ from essay_understanding.models import (
 from essay_understanding.providers.embeddings import HashingEmbedder
 from essay_understanding.providers.generation import DisabledGenerationProvider
 from essay_understanding.providers.generation import GenerationProvider
-from essay_understanding.processing import KnowledgeProcessor
+from essay_understanding.processing import AbstractionReadinessPolicy, KnowledgeProcessor
 from essay_understanding.repository import Repository
 from essay_understanding.vector_store import SQLiteVectorStore
 
@@ -121,7 +121,9 @@ class CoreTests(unittest.TestCase):
         source_layer = self.layer("Source")
         source_id = self.node(source_layer, "A mapping is not an identity relation.")
         self.engine.generation = FakeGeneration()
-        result = KnowledgeProcessor(self.engine).abstract_layer(source_layer, "Abstraction")
+        processor = KnowledgeProcessor(self.engine, AbstractionReadinessPolicy(
+            min_nodes=1, min_chars=1, short_record_nodes=1, required_surveys=1))
+        result = processor.abstract_layer(source_layer, "Abstraction")
         self.assertEqual(len(result["node_ids"]), 1)
         self.assertEqual(result["proposed_relation_types"], ["workspace:needs_review"])
         self.assertIsNone(self.repo.relation_type("workspace:needs_review"))
@@ -175,6 +177,10 @@ class CoreTests(unittest.TestCase):
         path = Path(self.temp.name) / "legacy.db"
         db = sqlite3.connect(path)
         try:
+            db.execute("""CREATE TABLE layers (
+                id TEXT PRIMARY KEY, name TEXT, description TEXT,
+                origin_type TEXT, created_at TEXT)""")
+            db.execute("INSERT INTO layers VALUES('legacy-input','Legacy input','','input','2025-01-01')")
             db.execute("""CREATE TABLE nodes (
                 id TEXT PRIMARY KEY, layer_id TEXT, title TEXT, content TEXT,
                 node_type TEXT, provenance_json TEXT, maturity TEXT, created_at TEXT)""")
@@ -190,6 +196,51 @@ class CoreTests(unittest.TestCase):
         self.assertTrue({"attributes_json", "valid_from", "valid_to"}.issubset(columns))
         node_columns = {row["name"] for row in migrated.rows("PRAGMA table_info(nodes)")}
         self.assertIn("attributes_json", node_columns)
+        self.assertEqual(migrated.rows(
+            "SELECT is_initial FROM layers WHERE id='legacy-input'")[0]["is_initial"], 1)
+
+    def test_initial_layer_is_historical_provenance_not_a_second_root(self):
+        first = self.layer("First admitted source")
+        second = self.layer("Later source")
+        rows = {row["id"]: row for row in self.repo.rows("SELECT * FROM layers")}
+        self.assertEqual(rows[first]["is_initial"], 1)
+        self.assertEqual(rows[second]["is_initial"], 0)
+        with self.assertRaisesRegex(ValueError, "already has"):
+            self.engine.create_layer(LayerCreate(
+                name="False second beginning", origin_type="input", is_initial=True))
+        with self.assertRaisesRegex(ValueError, "must use"):
+            self.engine.create_layer(LayerCreate(
+                name="External cannot be initial", origin_type="external", is_initial=True))
+
+    def test_readiness_and_external_placement_are_auditable(self):
+        class PlacementGeneration(GenerationProvider):
+            name = "placement-fake"
+
+            def structured(self, *, task, payload, **_):
+                source_ids = [item["id"] for item in payload["source_nodes"]]
+                return {
+                    "summary": "Different author and viewpoint require a peer layer.",
+                    "decisions": [{
+                        "source_node_ids": source_ids,
+                        "action": "create_peer_layer",
+                        "target_layer_type": "external",
+                        "target_layer_name": "External commentary",
+                        "independence_signals": ["different_author", "independent_viewpoint"],
+                        "rationale": "The material has independent provenance and authority.",
+                    }],
+                }
+
+        raw = self.layer("Initial text")
+        self.node(raw, "Original source passage")
+        processor = KnowledgeProcessor(self.engine, AbstractionReadinessPolicy(
+            min_nodes=2, min_chars=1000, short_record_nodes=5, required_surveys=2))
+        self.assertFalse(processor.abstraction_readiness([raw])["eligible"])
+        self.engine.generation = PlacementGeneration()
+        plan = processor.plan_material_placement([raw], "external_source", sample_limit=1)
+        self.assertEqual(plan["status"], "pending")
+        self.assertEqual(plan["plan"]["decisions"][0]["action"], "create_peer_layer")
+        self.assertEqual(self.repo.decide_placement_plan(plan["id"], "approved")["status"], "approved")
+        self.assertEqual(self.repo.export_all()["placement_plans"][0]["status"], "approved")
 
     def test_schema_discovery_proposes_compares_and_requires_approval(self):
         class DiscoveryGeneration(GenerationProvider):
@@ -244,7 +295,9 @@ class CoreTests(unittest.TestCase):
             KnowledgeProcessor(self.engine).discover_schema([raw], "company", sample_limit=4)
         generation = DiscoveryGeneration()
         self.engine.generation = generation
-        discovery = KnowledgeProcessor(self.engine).discover_schema(
+        processor = KnowledgeProcessor(self.engine, AbstractionReadinessPolicy(
+            min_nodes=4, min_chars=1, short_record_nodes=4, required_surveys=2))
+        discovery = processor.discover_schema(
             [raw], "company", sample_limit=4, max_chars_per_node=500)
         self.assertEqual(generation.task, "schema_discovery")
         self.assertEqual(len(generation.payload["representative_raw_sample"]), 4)
@@ -252,18 +305,24 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(len(discovery["comparisons"]), 5)
         self.assertFalse(self.repo.rows("SELECT id FROM layer_types WHERE id='company:projects'"))
         with self.assertRaisesRegex(ValueError, "must be approved"):
-            KnowledgeProcessor(self.engine).clean_with_schema(discovery["id"], max_nodes=4)
+            processor.clean_with_schema(discovery["id"], max_nodes=4)
 
         keys = [f"{item['kind']}:{item['id']}" for item in discovery["candidates"]]
-        approved = self.repo.approve_schema_discovery(discovery["id"], keys)
+        with self.assertRaisesRegex(ValueError, "enough independent surveys"):
+            self.repo.approve_schema_discovery(discovery["id"], keys)
+        confirmation = processor.discover_schema(
+            [raw], "company", sample_limit=4, max_chars_per_node=500)
+        self.assertEqual(confirmation["survey_round"], 2)
+        self.assertNotEqual(discovery["sample_node_ids"], confirmation["sample_node_ids"])
+        approved = self.repo.approve_schema_discovery(confirmation["id"], keys)
         self.assertEqual(len(approved["approved_candidates"]), 5)
         ontology = self.repo.ontology_snapshot()
         self.assertIn("company:projects", {item["id"] for item in ontology["layer_types"]})
         self.assertIn("company:owns_project", {item["id"] for item in ontology["relation_types"]})
         self.assertIn("company:deadline", {item["id"] for item in ontology["semantic_dimensions"]})
-        self.assertEqual(self.repo.schema_discovery(discovery["id"])["status"], "approved")
+        self.assertEqual(self.repo.schema_discovery(confirmation["id"])["status"], "approved")
 
-        cleaned = KnowledgeProcessor(self.engine).clean_with_schema(discovery["id"], max_nodes=4)
+        cleaned = processor.clean_with_schema(confirmation["id"], max_nodes=4)
         self.assertEqual(len(cleaned["layer_ids"]), 2)
         self.assertEqual(len(cleaned["node_ids"]), 2)
         self.assertEqual(len(cleaned["mapping_ids"]), 3)
@@ -271,12 +330,33 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(project["attributes_json"], '{"company:deadline": "2026-08-01"}')
         self.assertEqual(generation.task, "schema_guided_cleaning")
 
-        repeated = KnowledgeProcessor(self.engine).discover_schema([raw], "company", sample_limit=4)
+        selected_source = confirmation["sample_node_ids"][0]
+        placement_id = self.repo.create_placement_plan(
+            source_layer_ids=[raw], source_node_ids=[selected_source],
+            material_origin="external_source", generation_provider="test",
+            plan={"summary": "A mixed record routes to two governed peer layers.", "decisions": [
+                {"source_node_ids": [selected_source], "action": "create_peer_layer",
+                 "target_existing_layer_id": None, "target_layer_type": "company:people",
+                 "target_layer_name": "People", "same_source_continuation": False,
+                 "independence_signals": ["independent_lifecycle"], "rationale": "Person identity."},
+                {"source_node_ids": [selected_source], "action": "create_peer_layer",
+                 "target_existing_layer_id": None, "target_layer_type": "company:projects",
+                 "target_layer_name": "Projects", "same_source_continuation": False,
+                 "independence_signals": ["independent_lifecycle"], "rationale": "Project identity."},
+            ]})
+        self.repo.decide_placement_plan(placement_id, "approved")
+        constrained = processor.clean_with_schema(
+            confirmation["id"], [selected_source], max_nodes=1, placement_plan_id=placement_id)
+        constrained_node = self.repo.rows(
+            "SELECT provenance_json FROM nodes WHERE id=?", (constrained["node_ids"][0],))[0]
+        self.assertIn(placement_id, constrained_node["provenance_json"])
+
+        repeated = processor.discover_schema([raw], "company", sample_limit=4)
         self.assertTrue(all(item["recommendation"] == "reuse_existing"
                             for item in repeated["comparisons"]))
         default_approval = self.repo.approve_schema_discovery(repeated["id"])
         self.assertEqual(default_approval["approved_candidates"], [])
-        rejected = KnowledgeProcessor(self.engine).discover_schema([raw], "company", sample_limit=4)
+        rejected = processor.discover_schema([raw], "company", sample_limit=4)
         self.assertEqual(self.repo.reject_schema_discovery(rejected["id"])["status"], "rejected")
 
 

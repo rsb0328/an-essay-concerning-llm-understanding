@@ -100,11 +100,19 @@ class Repository:
               dataset_summary TEXT NOT NULL, candidates_json TEXT NOT NULL,
               comparisons_json TEXT NOT NULL, cleaning_guidance_json TEXT NOT NULL,
               status TEXT NOT NULL, generation_provider TEXT NOT NULL,
+              readiness_json TEXT NOT NULL DEFAULT '{}', survey_round INTEGER NOT NULL DEFAULT 1,
               created_at TEXT NOT NULL, decided_at TEXT
+            );
+            CREATE TABLE IF NOT EXISTS placement_plans (
+              id TEXT PRIMARY KEY, source_layer_ids_json TEXT NOT NULL,
+              source_node_ids_json TEXT NOT NULL, material_origin TEXT NOT NULL,
+              plan_json TEXT NOT NULL, status TEXT NOT NULL,
+              generation_provider TEXT NOT NULL, created_at TEXT NOT NULL, decided_at TEXT
             );
             CREATE TABLE IF NOT EXISTS layers (
               id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL,
-              origin_type TEXT NOT NULL, created_at TEXT NOT NULL
+              origin_type TEXT NOT NULL, is_initial INTEGER NOT NULL DEFAULT 0,
+              created_at TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS nodes (
               id TEXT PRIMARY KEY, layer_id TEXT NOT NULL REFERENCES layers(id) ON DELETE CASCADE,
@@ -159,6 +167,22 @@ class Repository:
             node_columns = {row[1] for row in db.execute("PRAGMA table_info(nodes)").fetchall()}
             if "attributes_json" not in node_columns:
                 db.execute("ALTER TABLE nodes ADD COLUMN attributes_json TEXT NOT NULL DEFAULT '{}'")
+            layer_columns = {row[1] for row in db.execute("PRAGMA table_info(layers)").fetchall()}
+            if "is_initial" not in layer_columns:
+                db.execute("ALTER TABLE layers ADD COLUMN is_initial INTEGER NOT NULL DEFAULT 0")
+            if not db.execute("SELECT 1 FROM layers WHERE is_initial=1 LIMIT 1").fetchone():
+                earliest = db.execute("""SELECT id FROM layers
+                  ORDER BY CASE WHEN origin_type='input' THEN 0 ELSE 1 END, created_at LIMIT 1""").fetchone()
+                if earliest:
+                    db.execute("UPDATE layers SET is_initial=1 WHERE id=?", (earliest[0],))
+            db.execute("""CREATE UNIQUE INDEX IF NOT EXISTS one_initial_layer
+              ON layers(is_initial) WHERE is_initial=1""")
+            discovery_columns = {row[1] for row in db.execute(
+                "PRAGMA table_info(schema_discoveries)").fetchall()}
+            if "readiness_json" not in discovery_columns:
+                db.execute("ALTER TABLE schema_discoveries ADD COLUMN readiness_json TEXT NOT NULL DEFAULT '{}'")
+            if "survey_round" not in discovery_columns:
+                db.execute("ALTER TABLE schema_discoveries ADD COLUMN survey_round INTEGER NOT NULL DEFAULT 1")
             for item in DEFAULT_LAYER_TYPES:
                 db.execute("INSERT OR IGNORE INTO layer_types VALUES(?,?,?,?,?,?)", (
                     item.id, item.label, item.description, item.namespace, "active", now()))
@@ -196,10 +220,18 @@ class Repository:
     def create_layer(self, item: LayerCreate) -> str:
         if not self.rows("SELECT id FROM layer_types WHERE id=? AND status='active'", (item.origin_type,)):
             raise ValueError(f"Unknown layer type: {item.origin_type}. Register it before use.")
+        existing_initial = bool(self.rows("SELECT id FROM layers WHERE is_initial=1 LIMIT 1"))
+        any_layer = bool(self.rows("SELECT id FROM layers LIMIT 1"))
+        is_initial = item.is_initial or (not any_layer and item.origin_type == "input")
+        if is_initial and item.origin_type != "input":
+            raise ValueError("The historical initial layer must use the core input type")
+        if is_initial and existing_initial:
+            raise ValueError("This workspace already has a historical initial layer")
         layer_id = str(uuid.uuid4())
         with self.connection() as db:
-            db.execute("INSERT INTO layers VALUES(?,?,?,?,?)", (
-                layer_id, item.name, item.description, item.origin_type, now()))
+            db.execute("""INSERT INTO layers
+              (id,name,description,origin_type,is_initial,created_at) VALUES(?,?,?,?,?,?)""", (
+                layer_id, item.name, item.description, item.origin_type, int(is_initial), now()))
         return layer_id
 
     def create_node(self, item: NodeCreate, node_id: str | None = None) -> str:
@@ -337,24 +369,47 @@ class Repository:
     def create_schema_discovery(self, *, source_layer_ids: list[str], sample_node_ids: list[str],
                                 namespace: str, dataset_summary: str,
                                 candidates: list[dict[str, Any]], comparisons: list[dict[str, Any]],
-                                cleaning_guidance: list[str], generation_provider: str) -> str:
+                                cleaning_guidance: list[str], generation_provider: str,
+                                readiness: dict[str, Any], survey_round: int) -> str:
         discovery_id = str(uuid.uuid4())
         with self.connection() as db:
-            db.execute("""INSERT INTO schema_discoveries VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""", (
-                discovery_id, json.dumps(source_layer_ids), json.dumps(sample_node_ids), namespace,
+            db.execute("""INSERT INTO schema_discoveries
+              (id,source_layer_ids_json,sample_node_ids_json,namespace,dataset_summary,
+               candidates_json,comparisons_json,cleaning_guidance_json,status,generation_provider,
+               readiness_json,survey_round,created_at,decided_at)
+              VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
+                discovery_id, json.dumps(sorted(source_layer_ids)), json.dumps(sample_node_ids), namespace,
                 dataset_summary, json.dumps(candidates, ensure_ascii=False),
                 json.dumps(comparisons, ensure_ascii=False),
                 json.dumps(cleaning_guidance, ensure_ascii=False), "pending",
-                generation_provider, now(), None,
+                generation_provider, json.dumps(readiness), survey_round, now(), None,
             ))
         return discovery_id
 
     @staticmethod
     def _decode_schema_discovery(row: dict[str, Any]) -> dict[str, Any]:
         item = dict(row)
-        for key in ("source_layer_ids", "sample_node_ids", "candidates", "comparisons", "cleaning_guidance"):
+        for key in ("source_layer_ids", "sample_node_ids", "candidates", "comparisons",
+                    "cleaning_guidance", "readiness"):
             item[key] = json.loads(item.pop(f"{key}_json"))
         return item
+
+    def next_schema_survey_round(self, source_layer_ids: list[str], namespace: str) -> int:
+        encoded = json.dumps(sorted(source_layer_ids))
+        rows = self.rows("""SELECT MAX(survey_round) AS maximum FROM schema_discoveries
+          WHERE source_layer_ids_json=? AND namespace=?""", (encoded, namespace))
+        return int(rows[0]["maximum"] or 0) + 1
+
+    def schema_candidate_support(self, discovery: dict[str, Any], candidate_key: str) -> int:
+        support = 0
+        for other in self.schema_discoveries():
+            if (set(other["source_layer_ids"]) != set(discovery["source_layer_ids"])
+                    or other["namespace"] != discovery["namespace"]
+                    or other["status"] == "rejected"):
+                continue
+            keys = {f"{item['kind']}:{item['id']}" for item in other["candidates"]}
+            support += int(candidate_key in keys)
+        return support
 
     def schema_discovery(self, discovery_id: str) -> dict[str, Any] | None:
         found = self.rows("SELECT * FROM schema_discoveries WHERE id=?", (discovery_id,))
@@ -386,6 +441,17 @@ class Repository:
                 raise ValueError(f"Unknown schema candidate keys: {', '.join(unknown)}")
         selected = {key for key in selected
                     if comparison_by_key.get(key, {}).get("recommendation") != "reuse_existing"}
+        required_surveys = int(discovery.get("readiness", {}).get("thresholds", {}).get(
+            "required_surveys", 1))
+        unstable = []
+        for key in sorted(selected):
+            support = self.schema_candidate_support(discovery, key)
+            if support < required_surveys:
+                unstable.append(f"{key} ({support}/{required_surveys} surveys)")
+        if unstable:
+            raise ValueError(
+                "Schema candidates have not repeated across enough independent surveys: "
+                + ", ".join(unstable))
         candidates = [item for key, item in by_key.items() if key in selected]
         selected_layer_types = {item.id for item in candidates if item.kind == "layer_type"}
         existing_layer_types = {row["id"] for row in self.rows(
@@ -435,6 +501,48 @@ class Repository:
             db.execute("UPDATE schema_discoveries SET status='rejected',decided_at=? WHERE id=?",
                        (now(), discovery_id))
         return {"id": discovery_id, "status": "rejected"}
+
+    def create_placement_plan(self, *, source_layer_ids: list[str], source_node_ids: list[str],
+                              material_origin: str, plan: dict[str, Any],
+                              generation_provider: str) -> str:
+        plan_id = str(uuid.uuid4())
+        with self.connection() as db:
+            db.execute("""INSERT INTO placement_plans
+              (id,source_layer_ids_json,source_node_ids_json,material_origin,plan_json,status,
+               generation_provider,created_at,decided_at) VALUES(?,?,?,?,?,?,?,?,?)""", (
+                plan_id, json.dumps(sorted(source_layer_ids)), json.dumps(sorted(source_node_ids)),
+                material_origin, json.dumps(plan, ensure_ascii=False), "pending",
+                generation_provider, now(), None))
+        return plan_id
+
+    @staticmethod
+    def _decode_placement_plan(row: dict[str, Any]) -> dict[str, Any]:
+        item = dict(row)
+        for key in ("source_layer_ids", "source_node_ids", "plan"):
+            item[key] = json.loads(item.pop(f"{key}_json"))
+        return item
+
+    def placement_plan(self, plan_id: str) -> dict[str, Any] | None:
+        rows = self.rows("SELECT * FROM placement_plans WHERE id=?", (plan_id,))
+        return self._decode_placement_plan(rows[0]) if rows else None
+
+    def placement_plans(self, status: str | None = None) -> list[dict[str, Any]]:
+        rows = self.rows("SELECT * FROM placement_plans WHERE status=? ORDER BY created_at DESC", (status,)) \
+            if status else self.rows("SELECT * FROM placement_plans ORDER BY created_at DESC")
+        return [self._decode_placement_plan(row) for row in rows]
+
+    def decide_placement_plan(self, plan_id: str, status: str) -> dict[str, Any]:
+        if status not in {"approved", "rejected"}:
+            raise ValueError("Placement plan status must be approved or rejected")
+        plan = self.placement_plan(plan_id)
+        if not plan:
+            raise ValueError("Placement plan not found")
+        if plan["status"] != "pending":
+            raise ValueError(f"Placement plan is already {plan['status']}")
+        with self.connection() as db:
+            db.execute("UPDATE placement_plans SET status=?,decided_at=? WHERE id=?",
+                       (status, now(), plan_id))
+        return {"id": plan_id, "status": status}
 
     def get_nodes(self, node_ids: list[str]) -> list[dict[str, Any]]:
         if not node_ids:
@@ -533,4 +641,5 @@ class Repository:
             "shortcuts": self.rows("SELECT * FROM shortcuts"),
             "ontology": self.ontology_snapshot(),
             "schema_discoveries": self.schema_discoveries(),
+            "placement_plans": self.placement_plans(),
         }

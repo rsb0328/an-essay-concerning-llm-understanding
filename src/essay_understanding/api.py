@@ -59,10 +59,21 @@ class SchemaDiscoveryRequest(BaseModel):
     max_chars_per_node: int = Field(default=4000, ge=200, le=4000)
 
 
+class ReadinessRequest(BaseModel):
+    layer_ids: list[str] = Field(min_length=1)
+
+
+class PlacementRequest(BaseModel):
+    source_layer_ids: list[str] = Field(min_length=1)
+    material_origin: str
+    sample_limit: int = Field(default=24, ge=1, le=32)
+
+
 class SchemaCleaningRequest(BaseModel):
     discovery_id: str
     source_node_ids: list[str] | None = None
     max_nodes: int = Field(default=24, ge=1, le=32)
+    placement_plan_id: str | None = None
 
 
 @app.get("/status")
@@ -75,6 +86,12 @@ def status():
                       "dimension": core.embedder.dimension},
         "vector_store": settings.vector_store,
         "data_dir": str(settings.data_dir),
+        "abstraction_thresholds": {
+            "min_nodes": settings.schema_min_nodes,
+            "min_chars": settings.schema_min_chars,
+            "short_record_nodes": settings.schema_short_record_nodes,
+            "required_surveys": settings.schema_required_surveys,
+        },
     }
 
 
@@ -156,15 +173,21 @@ def create_mapping(item: MappingCreate):
 
 @app.post("/process/abstract")
 def abstract_layer(item: AbstractionRequest):
-    return KnowledgeProcessor(engine()).abstract_layer(
-        item.source_layer_id, item.target_name, item.target_description, item.target_layer_type)
+    try:
+        return KnowledgeProcessor(engine()).abstract_layer(
+            item.source_layer_id, item.target_name, item.target_description, item.target_layer_type)
+    except (RuntimeError, ValueError) as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
 
 
 @app.post("/process/derive")
 def derive_layer(item: AbstractionRequest):
     """Domain-neutral alias for the backward-compatible abstraction endpoint."""
-    return KnowledgeProcessor(engine()).abstract_layer(
-        item.source_layer_id, item.target_name, item.target_description, item.target_layer_type)
+    try:
+        return KnowledgeProcessor(engine()).abstract_layer(
+            item.source_layer_id, item.target_name, item.target_description, item.target_layer_type)
+    except (RuntimeError, ValueError) as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
 
 
 @app.post("/process/map-layers")
@@ -182,11 +205,49 @@ def discover_schema(item: SchemaDiscoveryRequest):
         raise HTTPException(status_code=409, detail=str(error)) from error
 
 
+@app.post("/process/abstraction-readiness")
+def abstraction_readiness(item: ReadinessRequest):
+    try:
+        return KnowledgeProcessor(engine()).abstraction_readiness(item.layer_ids)
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+
+
+@app.post("/process/plan-placement")
+def plan_placement(item: PlacementRequest):
+    try:
+        return KnowledgeProcessor(engine()).plan_material_placement(
+            item.source_layer_ids, item.material_origin, item.sample_limit)
+    except (RuntimeError, ValueError) as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+
+
+@app.get("/placement-plans")
+def list_placement_plans(status: str | None = None):
+    return engine().repository.placement_plans(status)
+
+
+@app.post("/placement-plans/{plan_id}/approve")
+def approve_placement_plan(plan_id: str):
+    try:
+        return engine().repository.decide_placement_plan(plan_id, "approved")
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+
+
+@app.post("/placement-plans/{plan_id}/reject")
+def reject_placement_plan(plan_id: str):
+    try:
+        return engine().repository.decide_placement_plan(plan_id, "rejected")
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+
+
 @app.post("/process/clean-with-schema")
 def clean_with_schema(item: SchemaCleaningRequest):
     try:
         return KnowledgeProcessor(engine()).clean_with_schema(
-            item.discovery_id, item.source_node_ids, item.max_nodes)
+            item.discovery_id, item.source_node_ids, item.max_nodes, item.placement_plan_id)
     except (RuntimeError, ValueError) as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
 

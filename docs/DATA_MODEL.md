@@ -7,7 +7,8 @@ narrative analysis are ontology packs or workspaces built on the same storage an
 
 - **Layer type**: a registered, namespaced category such as `company:project`, `research:dataset`,
   `legal:rule`, or `philosophy:commentary`.
-- **Layer**: a peer context containing one class or perspective of information. No layer is permanently privileged.
+- **Layer**: a peer context containing one class or perspective of information. `is_initial` marks the historically
+  first admitted source for provenance, but no layer is permanently semantically privileged.
 - **Node**: a provenance-bearing semantic unit in one layer. It may represent text, an entity, event, measurement,
   requirement, claim, or another domain-defined unit.
 - **Relation type**: a registered ontology entry declaring direction, inverse, symmetry, transitivity, temporality,
@@ -20,7 +21,9 @@ narrative analysis are ontology packs or workspaces built on the same storage an
   failure conditions, maturity, reliability, history, and version.
 - **Query run**: an auditable observation of mode, depth, evidence, shortcut use, latency, and output.
 - **Schema discovery**: an auditable pre-cleaning survey containing representative source IDs, candidate layer/node/
-  attribute/relation dimensions, comparisons with the active ontology, cleaning guidance, and approval status.
+  attribute/relation dimensions, readiness metrics, survey round, comparisons, guidance, and approval status.
+- **Placement plan**: an auditable LLM proposal for appending, creating a peer/derived layer, linking only, or holding
+  source material. It is validated and approved separately from schema activation.
 
 ## Storage topology
 
@@ -40,6 +43,7 @@ flowchart TB
     N <-->|"source / target"| M["mappings"]
     CM --> S["shortcuts"]
     CM --> D["schema_discoveries"]
+    CM --> PP["placement_plans"]
     CM --> QR["query_runs"]
     S --> SR["shortcut_runs"]
 
@@ -55,6 +59,7 @@ flowchart TB
 | Mapping | SQLite `mappings` | none; traversed from canonical graph |
 | Shortcut | SQLite `shortcuts` and `shortcut_runs` | independent `shortcuts` namespace or collection |
 | Schema discovery | SQLite `schema_discoveries` | none |
+| Placement plan | SQLite `placement_plans` | none |
 | Query audit | SQLite `query_runs` | none |
 
 With the default backend, vectors are rows in the SQLite `vectors` table in the same database file but remain
