@@ -10,7 +10,7 @@ from typing import Any, Iterable
 
 from .models import (
     LayerCreate, LayerTypeCreate, MappingCreate, NodeCreate, OntologyBundle,
-    RelationTypeCreate, ShortcutCreate,
+    RelationTypeCreate, SchemaCandidate, ShortcutCreate,
 )
 
 
@@ -29,6 +29,25 @@ DEFAULT_RELATION_TYPES = (
     RelationTypeCreate(id="core:version_of", label="version of", namespace="core", default_traversal_weight=0.9),
     RelationTypeCreate(id="core:replaced_by", label="replaced by", namespace="core", temporal=True, default_traversal_weight=0.8),
     RelationTypeCreate(id="core:semantic_candidate", label="semantic candidate", namespace="core", default_traversal_weight=0.45),
+)
+
+DEFAULT_SEMANTIC_DIMENSIONS = (
+    SchemaCandidate(kind="node_type", id="semantic_unit", label="Semantic unit",
+                    rationale="Domain-neutral canonical unit"),
+    SchemaCandidate(kind="node_type", id="passage", label="Passage",
+                    rationale="Contiguous text segment"),
+    SchemaCandidate(kind="node_type", id="record", label="Record",
+                    rationale="Structured admitted record"),
+    SchemaCandidate(kind="node_type", id="entity", label="Entity",
+                    rationale="Stable identifiable object"),
+    SchemaCandidate(kind="node_type", id="event", label="Event",
+                    rationale="Time-bounded occurrence"),
+    SchemaCandidate(kind="node_type", id="measurement", label="Measurement",
+                    rationale="Observed quantitative value"),
+    SchemaCandidate(kind="node_type", id="requirement", label="Requirement",
+                    rationale="Normative or operational constraint"),
+    SchemaCandidate(kind="node_type", id="claim", label="Claim",
+                    rationale="Propositional assertion"),
 )
 
 
@@ -70,6 +89,19 @@ class Repository:
               allowed_source_types_json TEXT NOT NULL, allowed_target_types_json TEXT NOT NULL,
               validators_json TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS semantic_dimensions (
+              id TEXT NOT NULL, kind TEXT NOT NULL, label TEXT NOT NULL, description TEXT NOT NULL,
+              namespace TEXT NOT NULL, configuration_json TEXT NOT NULL,
+              status TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(id,kind)
+            );
+            CREATE TABLE IF NOT EXISTS schema_discoveries (
+              id TEXT PRIMARY KEY, source_layer_ids_json TEXT NOT NULL,
+              sample_node_ids_json TEXT NOT NULL, namespace TEXT NOT NULL,
+              dataset_summary TEXT NOT NULL, candidates_json TEXT NOT NULL,
+              comparisons_json TEXT NOT NULL, cleaning_guidance_json TEXT NOT NULL,
+              status TEXT NOT NULL, generation_provider TEXT NOT NULL,
+              created_at TEXT NOT NULL, decided_at TEXT
+            );
             CREATE TABLE IF NOT EXISTS layers (
               id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL,
               origin_type TEXT NOT NULL, created_at TEXT NOT NULL
@@ -77,7 +109,8 @@ class Repository:
             CREATE TABLE IF NOT EXISTS nodes (
               id TEXT PRIMARY KEY, layer_id TEXT NOT NULL REFERENCES layers(id) ON DELETE CASCADE,
               title TEXT NOT NULL, content TEXT NOT NULL, node_type TEXT NOT NULL,
-              provenance_json TEXT NOT NULL, maturity TEXT NOT NULL, created_at TEXT NOT NULL
+              attributes_json TEXT NOT NULL DEFAULT '{}', provenance_json TEXT NOT NULL,
+              maturity TEXT NOT NULL, created_at TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS mappings (
               id TEXT PRIMARY KEY,
@@ -123,6 +156,9 @@ class Repository:
                 db.execute("ALTER TABLE mappings ADD COLUMN valid_from TEXT")
             if "valid_to" not in mapping_columns:
                 db.execute("ALTER TABLE mappings ADD COLUMN valid_to TEXT")
+            node_columns = {row[1] for row in db.execute("PRAGMA table_info(nodes)").fetchall()}
+            if "attributes_json" not in node_columns:
+                db.execute("ALTER TABLE nodes ADD COLUMN attributes_json TEXT NOT NULL DEFAULT '{}'")
             for item in DEFAULT_LAYER_TYPES:
                 db.execute("INSERT OR IGNORE INTO layer_types VALUES(?,?,?,?,?,?)", (
                     item.id, item.label, item.description, item.namespace, "active", now()))
@@ -132,6 +168,19 @@ class Repository:
                     int(item.directional), int(item.symmetric), int(item.transitive), int(item.temporal),
                     item.default_traversal_weight, json.dumps(item.allowed_source_types),
                     json.dumps(item.allowed_target_types), json.dumps(item.validators), "active", now()))
+            for item in DEFAULT_SEMANTIC_DIMENSIONS:
+                db.execute("INSERT OR IGNORE INTO semantic_dimensions VALUES(?,?,?,?,?,?,?,?)", (
+                    item.id, item.kind, item.label, item.description, "core",
+                    item.model_dump_json(), "active", now()))
+            for row in db.execute("SELECT DISTINCT node_type FROM nodes").fetchall():
+                legacy_id = row[0]
+                configuration = {
+                    "kind": "node_type", "id": legacy_id, "label": legacy_id,
+                    "description": "", "rationale": "Migrated pre-registry node type",
+                }
+                db.execute("INSERT OR IGNORE INTO semantic_dimensions VALUES(?,?,?,?,?,?,?,?)", (
+                    legacy_id, "node_type", legacy_id, "", "legacy",
+                    json.dumps(configuration, ensure_ascii=False), "active", now()))
             for row in db.execute("SELECT DISTINCT origin_type FROM layers").fetchall():
                 db.execute("INSERT OR IGNORE INTO layer_types VALUES(?,?,?,?,?,?)", (
                     row[0], row[0], "Migrated pre-registry layer type", "legacy", "active", now()))
@@ -154,10 +203,24 @@ class Repository:
         return layer_id
 
     def create_node(self, item: NodeCreate, node_id: str | None = None) -> str:
+        if not self.rows("""SELECT id FROM semantic_dimensions
+          WHERE id=? AND kind='node_type' AND status='active'""", (item.node_type,)):
+            raise ValueError(f"Unknown node type: {item.node_type}. Register or approve it before use.")
+        if item.attributes:
+            marks = ",".join("?" for _ in item.attributes)
+            known = {row["id"] for row in self.rows(
+                f"""SELECT id FROM semantic_dimensions WHERE kind='attribute'
+                AND status='active' AND id IN ({marks})""", list(item.attributes))}
+            unknown = sorted(set(item.attributes) - known)
+            if unknown:
+                raise ValueError(f"Unknown node attributes: {', '.join(unknown)}")
         node_id = node_id or str(uuid.uuid4())
         with self.connection() as db:
-            db.execute("INSERT INTO nodes VALUES(?,?,?,?,?,?,?,?)", (
+            db.execute("""INSERT INTO nodes
+              (id,layer_id,title,content,node_type,attributes_json,provenance_json,maturity,created_at)
+              VALUES(?,?,?,?,?,?,?,?,?)""", (
                 node_id, item.layer_id, item.title, item.content, item.node_type,
+                json.dumps(item.attributes, ensure_ascii=False),
                 json.dumps(item.provenance, ensure_ascii=False), item.maturity, now()))
         return node_id
 
@@ -214,14 +277,29 @@ class Repository:
                 json.dumps(item.allowed_target_types), json.dumps(item.validators), "active", now()))
         return item.id
 
+    def register_semantic_dimension(self, item: SchemaCandidate, namespace: str) -> str:
+        if item.kind not in {"node_type", "attribute"}:
+            raise ValueError("Only node_type and attribute candidates use the semantic dimension registry")
+        with self.connection() as db:
+            db.execute("""INSERT OR REPLACE INTO semantic_dimensions
+              (id,kind,label,description,namespace,configuration_json,status,created_at)
+              VALUES(?,?,?,?,?,?,?,?)""", (
+                item.id, item.kind, item.label, item.description, namespace,
+                item.model_dump_json(), "active", now(),
+            ))
+        return item.id
+
     def import_ontology(self, bundle: OntologyBundle) -> dict[str, Any]:
         for item in bundle.layer_types:
             self.register_layer_type(item)
+        for item in bundle.semantic_dimensions:
+            self.register_semantic_dimension(item, item.id.split(":", 1)[0] if ":" in item.id else "workspace")
         for item in bundle.relation_types:
             self.register_relation_type(item)
         return {
             "name": bundle.name, "layer_types": len(bundle.layer_types),
             "relation_types": len(bundle.relation_types),
+            "semantic_dimensions": len(bundle.semantic_dimensions),
         }
 
     def relation_type(self, type_id: str) -> dict[str, Any] | None:
@@ -246,7 +324,117 @@ class Repository:
         return {
             "layer_types": self.rows("SELECT * FROM layer_types WHERE status='active' ORDER BY id"),
             "relation_types": relations,
+            "semantic_dimensions": [self._decode_dimension(row) for row in self.rows(
+                "SELECT * FROM semantic_dimensions WHERE status='active' ORDER BY kind,id")],
         }
+
+    @staticmethod
+    def _decode_dimension(row: dict[str, Any]) -> dict[str, Any]:
+        item = dict(row)
+        item["configuration"] = json.loads(item.pop("configuration_json"))
+        return item
+
+    def create_schema_discovery(self, *, source_layer_ids: list[str], sample_node_ids: list[str],
+                                namespace: str, dataset_summary: str,
+                                candidates: list[dict[str, Any]], comparisons: list[dict[str, Any]],
+                                cleaning_guidance: list[str], generation_provider: str) -> str:
+        discovery_id = str(uuid.uuid4())
+        with self.connection() as db:
+            db.execute("""INSERT INTO schema_discoveries VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""", (
+                discovery_id, json.dumps(source_layer_ids), json.dumps(sample_node_ids), namespace,
+                dataset_summary, json.dumps(candidates, ensure_ascii=False),
+                json.dumps(comparisons, ensure_ascii=False),
+                json.dumps(cleaning_guidance, ensure_ascii=False), "pending",
+                generation_provider, now(), None,
+            ))
+        return discovery_id
+
+    @staticmethod
+    def _decode_schema_discovery(row: dict[str, Any]) -> dict[str, Any]:
+        item = dict(row)
+        for key in ("source_layer_ids", "sample_node_ids", "candidates", "comparisons", "cleaning_guidance"):
+            item[key] = json.loads(item.pop(f"{key}_json"))
+        return item
+
+    def schema_discovery(self, discovery_id: str) -> dict[str, Any] | None:
+        found = self.rows("SELECT * FROM schema_discoveries WHERE id=?", (discovery_id,))
+        return self._decode_schema_discovery(found[0]) if found else None
+
+    def schema_discoveries(self, status: str | None = None) -> list[dict[str, Any]]:
+        rows = self.rows(
+            "SELECT * FROM schema_discoveries WHERE status=? ORDER BY created_at DESC", (status,)
+        ) if status else self.rows("SELECT * FROM schema_discoveries ORDER BY created_at DESC")
+        return [self._decode_schema_discovery(row) for row in rows]
+
+    def approve_schema_discovery(self, discovery_id: str,
+                                 candidate_keys: list[str] | None = None) -> dict[str, Any]:
+        discovery = self.schema_discovery(discovery_id)
+        if not discovery:
+            raise ValueError("Schema discovery not found")
+        if discovery["status"] != "pending":
+            raise ValueError(f"Schema discovery is already {discovery['status']}")
+        all_candidates = [SchemaCandidate.model_validate(item) for item in discovery["candidates"]]
+        by_key = {f"{item.kind}:{item.id}": item for item in all_candidates}
+        comparison_by_key = {item["candidate_key"]: item for item in discovery["comparisons"]}
+        if candidate_keys is None:
+            selected = {key for key, item in comparison_by_key.items()
+                        if item["recommendation"] == "add"}
+        else:
+            selected = set(candidate_keys)
+            unknown = sorted(selected - set(by_key))
+            if unknown:
+                raise ValueError(f"Unknown schema candidate keys: {', '.join(unknown)}")
+        selected = {key for key in selected
+                    if comparison_by_key.get(key, {}).get("recommendation") != "reuse_existing"}
+        candidates = [item for key, item in by_key.items() if key in selected]
+        selected_layer_types = {item.id for item in candidates if item.kind == "layer_type"}
+        existing_layer_types = {row["id"] for row in self.rows(
+            "SELECT id FROM layer_types WHERE status='active'")}
+        for item in candidates:
+            if item.kind != "relation_type":
+                continue
+            endpoints = set(item.allowed_source_types) | set(item.allowed_target_types)
+            missing = sorted(endpoints - existing_layer_types - selected_layer_types)
+            if missing:
+                raise ValueError(
+                    f"Approve or register endpoint layer types before relation {item.id}: {', '.join(missing)}")
+        approved: list[str] = []
+        for item in candidates:
+            if item.kind == "layer_type":
+                self.register_layer_type(LayerTypeCreate(
+                    id=item.id, label=item.label, description=item.description,
+                    namespace=discovery["namespace"]))
+                approved.append(f"layer_type:{item.id}")
+        for item in candidates:
+            if item.kind == "relation_type":
+                self.register_relation_type(RelationTypeCreate(
+                    id=item.id, label=item.label, description=item.description,
+                    namespace=discovery["namespace"], inverse_type=item.inverse_type,
+                    directional=item.directional, symmetric=item.symmetric,
+                    transitive=item.transitive, temporal=item.temporal,
+                    default_traversal_weight=item.default_traversal_weight,
+                    allowed_source_types=item.allowed_source_types,
+                    allowed_target_types=item.allowed_target_types,
+                    validators=item.validators))
+                approved.append(f"relation_type:{item.id}")
+            elif item.kind in {"node_type", "attribute"}:
+                self.register_semantic_dimension(item, discovery["namespace"])
+                approved.append(f"{item.kind}:{item.id}")
+        with self.connection() as db:
+            db.execute("UPDATE schema_discoveries SET status='approved',decided_at=? WHERE id=?",
+                       (now(), discovery_id))
+        return {"id": discovery_id, "status": "approved", "approved_candidates": approved}
+
+    def reject_schema_discovery(self, discovery_id: str) -> dict[str, Any]:
+        discovery = self.schema_discovery(discovery_id)
+        if not discovery:
+            raise ValueError("Schema discovery not found")
+        if discovery["status"] != "pending":
+            raise ValueError(f"Schema discovery is already {discovery['status']}")
+        with self.connection() as db:
+            db.execute("UPDATE schema_discoveries SET status='rejected',decided_at=? WHERE id=?",
+                       (now(), discovery_id))
+        return {"id": discovery_id, "status": "rejected"}
 
     def get_nodes(self, node_ids: list[str]) -> list[dict[str, Any]]:
         if not node_ids:
@@ -344,4 +532,5 @@ class Repository:
             "mappings": self.rows("SELECT * FROM mappings"),
             "shortcuts": self.rows("SELECT * FROM shortcuts"),
             "ontology": self.ontology_snapshot(),
+            "schema_discoveries": self.schema_discoveries(),
         }

@@ -2,7 +2,7 @@
 
 *A model-agnostic, domain-extensible multi-layer vector storage and retrieval system with explicit mappings and a peer shortcut layer—its title being a deliberate nod to John Locke.*
 
-[中文说明](README.zh-CN.md) · [Research data](research/) · [Scaling study](research/SCALING_STUDY.md) · [Configuration](docs/CONFIGURATION.md) · [Data model and mathematics](docs/DATA_MODEL.md) · [Ontologies](docs/ONTOLOGIES.md)
+[中文说明](README.zh-CN.md) · [Schema discovery](docs/SCHEMA_DISCOVERY.md) · [Research data](research/) · [Scaling study](research/SCALING_STUDY.md) · [Configuration](docs/CONFIGURATION.md) · [Data model and mathematics](docs/DATA_MODEL.md) · [Ontologies](docs/ONTOLOGIES.md)
 
 > **Alpha research software.** The architecture runs and its core invariants are tested, but the current evidence does not establish that layered retrieval is generally faster or more accurate than flat vector search. The repository is published to make that hypothesis testable, not to present it as settled.
 
@@ -12,6 +12,7 @@
 - [Install and use it](#install-and-use-it)
 - [A working theory of understanding](#a-working-theory-of-understanding)
 - [Open domain ontologies](#open-domain-ontologies)
+- [Schema discovery before cleaning](#schema-discovery-before-cleaning)
 - [How information moves through the system](#how-information-moves-through-the-system)
 - [Mathematics of multi-layer mapping](#mathematics-of-multi-layer-mapping)
 - [Architecture and replaceable dependencies](#architecture-and-replaceable-dependencies)
@@ -132,6 +133,10 @@ See [configuration](docs/CONFIGURATION.md) for provider examples and [data model
 Import the company example vocabulary with `essay-understanding ontology-import ontologies/company.example.json`,
 or register a workspace-specific ontology through `POST /ontology/import`.
 
+If the dimensions are not known in advance, admit material to an `input` layer and run
+`schema-discover NAMESPACE LAYER_ID`, review the pending result, then use `schema-approve` and `schema-clean`.
+These model-assisted stages require a generation provider; discovery never activates types by itself.
+
 ## A working theory of understanding
 
 The project begins from a modest claim: learning often occurs by establishing a revisable correspondence between new material and structures already available to the learner.
@@ -160,14 +165,22 @@ transitivity, temporality, allowed endpoint types, traversal weight, and validat
 attributes and validity intervals. Models can select an active relation or propose an unknown namespaced type for
 review; an unknown type is never silently persisted. See [Extensible domain ontologies](docs/ONTOLOGIES.md).
 
+## Schema discovery before cleaning
+
+When users do not know the domain structure in advance, material first enters the neutral `input` layer with only minimal normalization and provenance preservation. A bounded LLM survey proposes four distinct kinds of dimension: layer types for independently retrieved or governed contexts, node types for stable semantic units, attributes for descriptive values, and relation types for verifiable links.
+
+Candidates are compared only with active definitions of the same kind and stored as a pending discovery. Exact matches are reused; possible semantic overlaps require explicit selection; nothing is activated by the survey itself. After approval, schema-guided cleaning validates every target layer, node type, attribute, relation, and source pointer before routing derived units into peer layers. See [Schema discovery](docs/SCHEMA_DISCOVERY.md).
+
 ## How information moves through the system
 
 The original ideas are implemented as ordinary application logic and data—not as a hidden prompt or a skill inside one particular LLM.
 
 ```mermaid
 flowchart TD
-    A["Text, record, entity, event, or other input"] --> B["Normalize into domain units; preserve provenance"]
-    B --> C["Create a peer knowledge layer"]
+    A["Unknown raw input"] --> B["Neutral input layer; preserve provenance"]
+    B --> SD["LLM schema survey"]
+    SD --> O["Compare, review, and approve ontology changes"]
+    O --> C["Clean and route into peer layers"]
     C --> D["Build a replaceable vector index"]
     D --> E["Optional abstraction or cross-layer comparison"]
     E --> F["Validate and store explicit mappings"]
@@ -184,17 +197,17 @@ flowchart TD
     L -->|"repeated success"| S
 ```
 
-### 1. Register the workspace ontology
+### 1. Neutral admission and schema discovery
 
-The workspace declares its allowed layer and relation types. The engine provides only a small structural core; company, research, legal, software, narrative, and philosophy vocabularies are data packs.
+Known workspaces may import an ontology directly. Unknown material enters a neutral input layer, is sampled, and receives a bounded model-assisted schema survey. Proposed layer, node, attribute, and relation dimensions remain pending.
 
-### 2. Admission and provenance
+### 2. Comparison and approval
 
-Input may arrive as text, a structured record, or adapter-normalized data. Hashes, locations, timestamps, and user-supplied provenance remain attached to canonical nodes. Generated vectors are never the sole copy of knowledge.
+Candidates are compared with the active registry. Exact matches are reused, possible overlaps are flagged, and novel candidates require approval. Discovery never changes the ontology automatically.
 
-### 3. Peer-layer creation
+### 3. Schema-guided cleaning and peer-layer creation
 
-People, projects, policies, sources, interpretations, abstractions, or other declared categories can become independent layers. A query may select a temporary reference layer, but the model has no permanent root.
+Approved structure routes bounded raw-node batches into independently selectable peer layers. Every cleaned unit retains explicit raw source IDs; the original input remains canonical evidence.
 
 ### 4. Domain-aware normalization
 
@@ -247,7 +260,7 @@ later similar encounter → retrieve route first → search selectively → upda
 
 ### 14. Audit, export, and rebuilding
 
-Queries record requested and reached depth, evidence IDs, shortcut use, latency, and outcome. The ontology registry, layers, nodes, mappings, and shortcuts export as JSON. Vector stores are excluded because they are reproducible derived indexes.
+Queries record requested and reached depth, evidence IDs, shortcut use, latency, and outcome. The ontology registry, schema discoveries, layers, nodes, mappings, and shortcuts export as JSON. Vector stores are excluded because they are reproducible derived indexes.
 
 ## Mathematics of multi-layer mapping
 
@@ -364,6 +377,7 @@ Implemented in this open-source package:
 - peer layers, nodes, provenance, and mappings;
 - model-independent transformation and ontology-constrained relation protocols;
 - extensible layer and relation registries with company and philosophy example packs;
+- pre-cleaning schema discovery, overlap triage, approval, and schema-guided multi-layer routing;
 - depth/breadth/relation/cycle/information-gain traversal controls;
 - shortcut-first routing;
 - candidate shortcut creation, reinforcement, activation, and use history;

@@ -175,6 +175,9 @@ class CoreTests(unittest.TestCase):
         path = Path(self.temp.name) / "legacy.db"
         db = sqlite3.connect(path)
         try:
+            db.execute("""CREATE TABLE nodes (
+                id TEXT PRIMARY KEY, layer_id TEXT, title TEXT, content TEXT,
+                node_type TEXT, provenance_json TEXT, maturity TEXT, created_at TEXT)""")
             db.execute("""CREATE TABLE mappings (
                 id TEXT PRIMARY KEY, source_node_id TEXT, target_node_id TEXT,
                 relation_type TEXT, confidence REAL, evidence TEXT, status TEXT,
@@ -185,6 +188,96 @@ class CoreTests(unittest.TestCase):
         migrated = Repository(path)
         columns = {row["name"] for row in migrated.rows("PRAGMA table_info(mappings)")}
         self.assertTrue({"attributes_json", "valid_from", "valid_to"}.issubset(columns))
+        node_columns = {row["name"] for row in migrated.rows("PRAGMA table_info(nodes)")}
+        self.assertIn("attributes_json", node_columns)
+
+    def test_schema_discovery_proposes_compares_and_requires_approval(self):
+        class DiscoveryGeneration(GenerationProvider):
+            name = "discovery-fake"
+
+            def structured(self, *, task, payload, **_):
+                self.task = task
+                self.payload = payload
+                if task == "schema_guided_cleaning":
+                    source_id = payload["source_nodes"][0]["id"]
+                    return {
+                        "units": [
+                            {"target_layer_type": "company:people", "target_layer_name": "People",
+                             "title": "Employee E0", "content": "Employee E0",
+                             "node_type": "company:employee", "source_node_ids": [source_id]},
+                            {"target_layer_type": "company:projects", "target_layer_name": "Projects",
+                             "title": "Project P0", "content": "Project P0 is due on 2026-08-01.",
+                             "node_type": "entity", "attributes": {"company:deadline": "2026-08-01"},
+                             "source_node_ids": [source_id]},
+                        ],
+                        "relations": [
+                            {"source_unit": 0, "target_unit": 1,
+                             "relation_type": "company:owns_project", "confidence": .98,
+                             "evidence": "The raw record explicitly states ownership."}
+                        ],
+                    }
+                return {
+                    "dataset_summary": "Company records contain people, projects, deadlines, and ownership.",
+                    "candidates": [
+                        {"kind": "layer_type", "id": "company:people", "label": "People",
+                         "description": "Personnel records", "rationale": "Independent identity and access."},
+                        {"kind": "layer_type", "id": "company:projects", "label": "Projects",
+                         "description": "Project records", "rationale": "Independent lifecycle and retrieval."},
+                        {"kind": "node_type", "id": "company:employee", "label": "Employee",
+                         "description": "A person employed by the company", "rationale": "Stable entity identity."},
+                        {"kind": "attribute", "id": "company:deadline", "label": "Deadline",
+                         "description": "A project due date", "rationale": "A scalar value, not a layer.",
+                         "value_type": "datetime"},
+                        {"kind": "relation_type", "id": "company:owns_project", "label": "owns project",
+                         "description": "A people record owns a project", "rationale": "Verifiable cross-layer link.",
+                         "allowed_source_types": ["company:people"],
+                         "allowed_target_types": ["company:projects"],
+                         "default_traversal_weight": 0.9},
+                    ],
+                    "cleaning_guidance": ["Preserve employee identifiers and deadline timestamps."],
+                }
+
+        raw = self.layer("Raw company inbox")
+        for index in range(8):
+            self.node(raw, f"Record {index}: employee E{index} owns project P{index}; deadline 2026-08-{index + 1:02d}.")
+        with self.assertRaisesRegex(RuntimeError, "generation provider"):
+            KnowledgeProcessor(self.engine).discover_schema([raw], "company", sample_limit=4)
+        generation = DiscoveryGeneration()
+        self.engine.generation = generation
+        discovery = KnowledgeProcessor(self.engine).discover_schema(
+            [raw], "company", sample_limit=4, max_chars_per_node=500)
+        self.assertEqual(generation.task, "schema_discovery")
+        self.assertEqual(len(generation.payload["representative_raw_sample"]), 4)
+        self.assertEqual(discovery["status"], "pending")
+        self.assertEqual(len(discovery["comparisons"]), 5)
+        self.assertFalse(self.repo.rows("SELECT id FROM layer_types WHERE id='company:projects'"))
+        with self.assertRaisesRegex(ValueError, "must be approved"):
+            KnowledgeProcessor(self.engine).clean_with_schema(discovery["id"], max_nodes=4)
+
+        keys = [f"{item['kind']}:{item['id']}" for item in discovery["candidates"]]
+        approved = self.repo.approve_schema_discovery(discovery["id"], keys)
+        self.assertEqual(len(approved["approved_candidates"]), 5)
+        ontology = self.repo.ontology_snapshot()
+        self.assertIn("company:projects", {item["id"] for item in ontology["layer_types"]})
+        self.assertIn("company:owns_project", {item["id"] for item in ontology["relation_types"]})
+        self.assertIn("company:deadline", {item["id"] for item in ontology["semantic_dimensions"]})
+        self.assertEqual(self.repo.schema_discovery(discovery["id"])["status"], "approved")
+
+        cleaned = KnowledgeProcessor(self.engine).clean_with_schema(discovery["id"], max_nodes=4)
+        self.assertEqual(len(cleaned["layer_ids"]), 2)
+        self.assertEqual(len(cleaned["node_ids"]), 2)
+        self.assertEqual(len(cleaned["mapping_ids"]), 3)
+        project = self.repo.rows("SELECT * FROM nodes WHERE id=?", (cleaned["node_ids"][1],))[0]
+        self.assertEqual(project["attributes_json"], '{"company:deadline": "2026-08-01"}')
+        self.assertEqual(generation.task, "schema_guided_cleaning")
+
+        repeated = KnowledgeProcessor(self.engine).discover_schema([raw], "company", sample_limit=4)
+        self.assertTrue(all(item["recommendation"] == "reuse_existing"
+                            for item in repeated["comparisons"]))
+        default_approval = self.repo.approve_schema_discovery(repeated["id"])
+        self.assertEqual(default_approval["approved_candidates"], [])
+        rejected = KnowledgeProcessor(self.engine).discover_schema([raw], "company", sample_limit=4)
+        self.assertEqual(self.repo.reject_schema_discovery(rejected["id"])["status"], "rejected")
 
 
 if __name__ == "__main__":

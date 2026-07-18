@@ -11,6 +11,12 @@
     {"id": "company:metric", "label": "Metric", "namespace": "company"},
     {"id": "company:event", "label": "Event or meeting", "namespace": "company"}
   ],
+  "semantic_dimensions": [
+    {"kind": "node_type", "id": "company:employee", "label": "Employee", "description": "A person acting in an employment context", "rationale": "Stable identity-bearing unit"},
+    {"kind": "node_type", "id": "company:project_record", "label": "Project record", "description": "A canonical project unit", "rationale": "Stable project identity"},
+    {"kind": "attribute", "id": "company:deadline", "label": "Deadline", "description": "A due date attached to another unit", "rationale": "A value rather than an independent layer", "value_type": "datetime"},
+    {"kind": "attribute", "id": "company:risk_score", "label": "Risk score", "description": "A numeric risk assessment", "rationale": "A measurement describing a risk or project", "value_type": "number"}
+  ],
   "relation_types": [
     {"id": "company:reports_to", "label": "reports to", "namespace": "company", "inverse_type": "company:manages", "allowed_source_types": ["company:person", "company:organization"], "allowed_target_types": ["company:person", "company:organization"], "default_traversal_weight": 0.9, "validators": ["distinct_endpoints"]},
     {"id": "company:manages", "label": "manages", "namespace": "company", "inverse_type": "company:reports_to", "allowed_source_types": ["company:person", "company:organization"], "allowed_target_types": ["company:person", "company:organization"], "default_traversal_weight": 0.9, "validators": ["distinct_endpoints"]},
