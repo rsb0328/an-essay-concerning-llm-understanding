@@ -19,15 +19,6 @@ from .repository import Repository
 from .vector_store import VectorStore
 
 
-RELATION_WEIGHTS = {
-    "abstracted_from": 1.0, "cites": 1.0, "defines": 0.95, "supports": 0.95,
-    "contradicts": 0.95, "qualifies": 0.90, "interprets": 0.90,
-    "derives_from": 0.90, "depends_on": 0.90, "extends": 0.80,
-    "analogous_to": 0.70, "equivalent_to": 0.90, "refers_to": 0.75,
-    "semantic_candidate": 0.45,
-}
-
-
 class MemoryEngine:
     def __init__(self, repository: Repository, embedder: Embedder,
                  vectors: VectorStore, generation: GenerationProvider):
@@ -70,11 +61,23 @@ class MemoryEngine:
         for index, content in enumerate(filter(None, chunks)):
             ids.append(self.create_node(NodeCreate(
                 layer_id=layer_id, title=f"{title} · {index + 1}", content=content,
+                node_type="passage",
                 provenance={**(provenance or {}), "document_sha256": document_hash, "chunk": index},
             )))
         return ids
 
     def create_shortcut(self, item: ShortcutCreate) -> str:
+        if item.plan.start_layer_ids:
+            marks = ",".join("?" for _ in item.plan.start_layer_ids)
+            known_layers = {row["id"] for row in self.repository.rows(
+                f"SELECT id FROM layers WHERE id IN ({marks})", item.plan.start_layer_ids)}
+            unknown_layers = sorted(set(item.plan.start_layer_ids) - known_layers)
+            if unknown_layers:
+                raise ValueError(f"Shortcut references unknown layers: {', '.join(unknown_layers)}")
+        unknown_relations = sorted({relation for relation in item.plan.relation_types
+                                    if not self.repository.relation_type(relation)})
+        if unknown_relations:
+            raise ValueError(f"Shortcut references unknown relation types: {', '.join(unknown_relations)}")
         signature = self._plan_signature(item.plan)
         shortcut_id = self.repository.create_shortcut(item, signature)
         trigger_vectors = self.embedder.encode(item.trigger_examples)
@@ -157,7 +160,7 @@ class MemoryEngine:
                 if neighbor in best or current not in best:
                     continue
                 path = (best[current]["path_score"] * mapping["confidence"]
-                        * RELATION_WEIGHTS.get(mapping["relation_type"], 0.65) * 0.88)
+                        * self.repository.relation_weight(mapping["relation_type"]) * 0.88)
                 if neighbor not in proposed or path > proposed[neighbor]["path_score"]:
                     proposed[neighbor] = {"path_score": path, "parent_node_id": current}
             if not proposed:

@@ -2,6 +2,10 @@
 
 All settings use the `AEC_` prefix. The application loads a local `.env` file when present; process-level environment variables take precedence.
 
+Domain semantics are data, not environment configuration. Register a workspace ontology through
+`POST /ontology/import` or `essay-understanding ontology-import PATH` before creating domain-specific layers and
+mappings. See [Extensible domain ontologies](ONTOLOGIES.md).
+
 ## Generation
 
 | Variable | Meaning |
@@ -10,7 +14,7 @@ All settings use the `AEC_` prefix. The application loads a local `.env` file wh
 | `AEC_LLM_MODEL` | Provider model identifier |
 | `AEC_LLM_API_KEY` | Optional bearer token |
 
-If URL or model is empty, generation is disabled. In that mode, imports, mappings, vector search, graph traversal, shortcut routing, shortcut learning, and evidence output remain available; model-assisted abstraction, logical classification, and prose answers do not.
+If URL or model is empty, generation is disabled. In that mode, imports, mappings, vector search, graph traversal, shortcut routing, shortcut learning, and evidence output remain available; model-assisted transformation, ontology-constrained classification, and prose answers do not.
 
 The endpoint should support `/chat/completions` and ideally strict JSON Schema output. Some nominally compatible servers ignore `response_format`; adapter contributions may add provider-specific handling without moving task logic into the adapter.
 

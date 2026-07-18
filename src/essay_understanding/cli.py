@@ -6,7 +6,7 @@ import json
 import uvicorn
 
 from .documents import parser_for
-from .models import QueryRequest
+from .models import OntologyBundle, QueryRequest
 from .runtime import engine
 
 
@@ -22,6 +22,8 @@ def main() -> None:
     ingest = sub.add_parser("ingest-file", help="Parse and ingest a local document")
     ingest.add_argument("layer_id")
     ingest.add_argument("path")
+    ontology = sub.add_parser("ontology-import", help="Import layer and relation types from JSON")
+    ontology.add_argument("path")
     sub.add_parser("status", help="Show configured providers")
     sub.add_parser("export", help="Export canonical memory as JSON")
     args = parser.parse_args()
@@ -37,6 +39,10 @@ def main() -> None:
         ids = engine().ingest_text(
             args.layer_id, document.title, document.text, provenance=document.provenance)
         print(json.dumps({"node_ids": ids, "count": len(ids)}, indent=2))
+    elif args.command == "ontology-import":
+        from pathlib import Path
+        bundle = OntologyBundle.model_validate_json(Path(args.path).read_text(encoding="utf-8"))
+        print(json.dumps(engine().repository.import_ontology(bundle), ensure_ascii=False, indent=2))
     elif args.command == "status":
         core = engine()
         print(json.dumps({

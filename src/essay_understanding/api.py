@@ -7,7 +7,10 @@ from fastapi import FastAPI
 from pydantic import BaseModel, Field
 
 from .config import load_settings
-from .models import LayerCreate, MappingCreate, NodeCreate, QueryRequest, ShortcutCreate
+from .models import (
+    LayerCreate, LayerTypeCreate, MappingCreate, NodeCreate, OntologyBundle,
+    QueryRequest, RelationTypeCreate, ShortcutCreate,
+)
 from .runtime import engine
 from .processing import KnowledgeProcessor
 
@@ -20,7 +23,7 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(
     title="An Essay Concerning LLM Understanding",
-    description="Model-agnostic layered semantic memory and learned retrieval shortcuts.",
+    description="Model-agnostic multi-layer vector storage with extensible domain ontologies and a peer shortcut layer.",
     version="0.1.0",
     lifespan=lifespan,
 )
@@ -38,7 +41,8 @@ class TextIngest(BaseModel):
 class AbstractionRequest(BaseModel):
     source_layer_id: str
     target_name: str
-    target_description: str = "Machine-generated abstraction"
+    target_description: str = "Machine-derived semantic units"
+    target_layer_type: str = "machine_derived"
 
 
 class LayerMappingRequest(BaseModel):
@@ -71,6 +75,26 @@ def list_layers():
     return engine().repository.rows("SELECT * FROM layers ORDER BY created_at")
 
 
+@app.get("/ontology")
+def get_ontology():
+    return engine().repository.ontology_snapshot()
+
+
+@app.post("/ontology/layer-types")
+def register_layer_type(item: LayerTypeCreate):
+    return {"id": engine().repository.register_layer_type(item)}
+
+
+@app.post("/ontology/relation-types")
+def register_relation_type(item: RelationTypeCreate):
+    return {"id": engine().repository.register_relation_type(item)}
+
+
+@app.post("/ontology/import")
+def import_ontology(item: OntologyBundle):
+    return engine().repository.import_ontology(item)
+
+
 @app.post("/nodes")
 def create_node(item: NodeCreate):
     return {"id": engine().create_node(item)}
@@ -91,7 +115,14 @@ def create_mapping(item: MappingCreate):
 @app.post("/process/abstract")
 def abstract_layer(item: AbstractionRequest):
     return KnowledgeProcessor(engine()).abstract_layer(
-        item.source_layer_id, item.target_name, item.target_description)
+        item.source_layer_id, item.target_name, item.target_description, item.target_layer_type)
+
+
+@app.post("/process/derive")
+def derive_layer(item: AbstractionRequest):
+    """Domain-neutral alias for the backward-compatible abstraction endpoint."""
+    return KnowledgeProcessor(engine()).abstract_layer(
+        item.source_layer_id, item.target_name, item.target_description, item.target_layer_type)
 
 
 @app.post("/process/map-layers")

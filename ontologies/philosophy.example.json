@@ -1,0 +1,20 @@
+{
+  "name": "Philosophical interpretation example",
+  "description": "The vocabulary used by the first prototype, now an optional domain example rather than the system ontology.",
+  "layer_types": [
+    {"id": "philosophy:primary_text", "label": "Primary text", "namespace": "philosophy"},
+    {"id": "philosophy:commentary", "label": "Commentary", "namespace": "philosophy"},
+    {"id": "philosophy:argument", "label": "Argument", "namespace": "philosophy"},
+    {"id": "philosophy:concept", "label": "Concept", "namespace": "philosophy"}
+  ],
+  "relation_types": [
+    {"id": "philosophy:supports", "label": "supports", "namespace": "philosophy", "default_traversal_weight": 0.95},
+    {"id": "philosophy:contradicts", "label": "contradicts", "namespace": "philosophy", "symmetric": true, "default_traversal_weight": 0.95, "validators": ["distinct_endpoints"]},
+    {"id": "philosophy:qualifies", "label": "qualifies", "namespace": "philosophy", "default_traversal_weight": 0.9},
+    {"id": "philosophy:interprets", "label": "interprets", "namespace": "philosophy", "allowed_source_types": ["philosophy:commentary"], "default_traversal_weight": 0.9},
+    {"id": "philosophy:derives_from", "label": "derives from", "namespace": "philosophy", "default_traversal_weight": 0.9},
+    {"id": "philosophy:analogous_to", "label": "analogous to", "namespace": "philosophy", "symmetric": true, "default_traversal_weight": 0.7},
+    {"id": "philosophy:defines", "label": "defines", "namespace": "philosophy", "default_traversal_weight": 0.95},
+    {"id": "philosophy:presupposes", "label": "presupposes", "namespace": "philosophy", "default_traversal_weight": 0.85}
+  ]
+}

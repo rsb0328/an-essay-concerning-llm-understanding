@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 
 from essay_understanding.engine import MemoryEngine
-from essay_understanding.models import LayerCreate, MappingCreate, NodeCreate, QueryRequest, ShortcutCreate, ShortcutPlan
+from essay_understanding.models import LayerCreate, MappingCreate, NodeCreate, QueryRequest, RelationTypeCreate, ShortcutCreate, ShortcutPlan
 from essay_understanding.providers.embeddings import HashingEmbedder
 from essay_understanding.providers.generation import DisabledGenerationProvider
 from essay_understanding.repository import Repository
@@ -48,8 +48,12 @@ def main() -> None:
     repository = Repository(Path(temp.name) / "knowledge.db")
     embedder = HashingEmbedder(384)
     engine = MemoryEngine(repository, embedder, SQLiteVectorStore(repository), DisabledGenerationProvider())
+    for relation in ("qualifies", "supports", "contradicts"):
+        repository.register_relation_type(RelationTypeCreate(
+            id=f"benchmark:{relation}", label=relation, namespace="benchmark",
+            default_traversal_weight=0.9))
     layer_ids = [engine.create_layer(LayerCreate(
-        name=f"Synthetic layer {index + 1}", origin_type="source" if index == 0 else "derived"))
+        name=f"Synthetic layer {index + 1}", origin_type="input" if index == 0 else "derived"))
         for index in range(args.layers)]
 
     started = time.perf_counter()
@@ -66,7 +70,7 @@ def main() -> None:
             if source != target:
                 engine.create_mapping(MappingCreate(
                     source_node_id=source, target_node_id=target,
-                    relation_type=("qualifies", "supports", "contradicts")[offset % 3],
+                    relation_type=f"benchmark:{('qualifies', 'supports', 'contradicts')[offset % 3]}",
                     confidence=0.7 + 0.05 * (offset % 3)))
     build_ms = (time.perf_counter() - started) * 1000
 
@@ -110,4 +114,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

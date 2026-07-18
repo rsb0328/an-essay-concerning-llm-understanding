@@ -8,7 +8,28 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
-from .models import LayerCreate, MappingCreate, NodeCreate, ShortcutCreate
+from .models import (
+    LayerCreate, LayerTypeCreate, MappingCreate, NodeCreate, OntologyBundle,
+    RelationTypeCreate, ShortcutCreate,
+)
+
+
+DEFAULT_LAYER_TYPES = (
+    LayerTypeCreate(id="input", label="Admitted input", description="Canonical material admitted to a workspace", namespace="core"),
+    LayerTypeCreate(id="external", label="Externally supplied", description="Information supplied by a person or external system", namespace="core"),
+    LayerTypeCreate(id="machine_derived", label="Machine derived", description="Units derived by a configured processing provider", namespace="core"),
+    LayerTypeCreate(id="derived", label="Derived knowledge", namespace="core"),
+    LayerTypeCreate(id="procedural", label="Procedural memory", namespace="core"),
+)
+
+DEFAULT_RELATION_TYPES = (
+    RelationTypeCreate(id="core:derived_from", label="derived from", namespace="core", default_traversal_weight=0.9),
+    RelationTypeCreate(id="core:cites", label="cites", namespace="core", default_traversal_weight=1.0),
+    RelationTypeCreate(id="core:contains", label="contains", namespace="core", default_traversal_weight=0.8),
+    RelationTypeCreate(id="core:version_of", label="version of", namespace="core", default_traversal_weight=0.9),
+    RelationTypeCreate(id="core:replaced_by", label="replaced by", namespace="core", temporal=True, default_traversal_weight=0.8),
+    RelationTypeCreate(id="core:semantic_candidate", label="semantic candidate", namespace="core", default_traversal_weight=0.45),
+)
 
 
 def now() -> str:
@@ -37,6 +58,18 @@ class Repository:
     def initialize(self) -> None:
         with self.connection() as db:
             db.executescript("""
+            CREATE TABLE IF NOT EXISTS layer_types (
+              id TEXT PRIMARY KEY, label TEXT NOT NULL, description TEXT NOT NULL,
+              namespace TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS relation_types (
+              id TEXT PRIMARY KEY, label TEXT NOT NULL, description TEXT NOT NULL,
+              namespace TEXT NOT NULL, inverse_type TEXT, directional INTEGER NOT NULL,
+              symmetric INTEGER NOT NULL, transitive INTEGER NOT NULL, temporal INTEGER NOT NULL,
+              default_traversal_weight REAL NOT NULL,
+              allowed_source_types_json TEXT NOT NULL, allowed_target_types_json TEXT NOT NULL,
+              validators_json TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS layers (
               id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL,
               origin_type TEXT NOT NULL, created_at TEXT NOT NULL
@@ -51,7 +84,8 @@ class Repository:
               source_node_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
               target_node_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
               relation_type TEXT NOT NULL, confidence REAL NOT NULL, evidence TEXT NOT NULL,
-              status TEXT NOT NULL, created_at TEXT NOT NULL,
+              status TEXT NOT NULL, attributes_json TEXT NOT NULL DEFAULT '{}',
+              valid_from TEXT, valid_to TEXT, created_at TEXT NOT NULL,
               UNIQUE(source_node_id, target_node_id, relation_type)
             );
             CREATE TABLE IF NOT EXISTS shortcuts (
@@ -82,12 +116,37 @@ class Repository:
               updated_at TEXT NOT NULL, PRIMARY KEY(item_id, namespace, model)
             );
             """)
+            mapping_columns = {row[1] for row in db.execute("PRAGMA table_info(mappings)").fetchall()}
+            if "attributes_json" not in mapping_columns:
+                db.execute("ALTER TABLE mappings ADD COLUMN attributes_json TEXT NOT NULL DEFAULT '{}'")
+            if "valid_from" not in mapping_columns:
+                db.execute("ALTER TABLE mappings ADD COLUMN valid_from TEXT")
+            if "valid_to" not in mapping_columns:
+                db.execute("ALTER TABLE mappings ADD COLUMN valid_to TEXT")
+            for item in DEFAULT_LAYER_TYPES:
+                db.execute("INSERT OR IGNORE INTO layer_types VALUES(?,?,?,?,?,?)", (
+                    item.id, item.label, item.description, item.namespace, "active", now()))
+            for item in DEFAULT_RELATION_TYPES:
+                db.execute("INSERT OR IGNORE INTO relation_types VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (
+                    item.id, item.label, item.description, item.namespace, item.inverse_type,
+                    int(item.directional), int(item.symmetric), int(item.transitive), int(item.temporal),
+                    item.default_traversal_weight, json.dumps(item.allowed_source_types),
+                    json.dumps(item.allowed_target_types), json.dumps(item.validators), "active", now()))
+            for row in db.execute("SELECT DISTINCT origin_type FROM layers").fetchall():
+                db.execute("INSERT OR IGNORE INTO layer_types VALUES(?,?,?,?,?,?)", (
+                    row[0], row[0], "Migrated pre-registry layer type", "legacy", "active", now()))
+            for row in db.execute("SELECT DISTINCT relation_type FROM mappings").fetchall():
+                db.execute("INSERT OR IGNORE INTO relation_types VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (
+                    row[0], row[0], "Migrated pre-registry relation type", "legacy", None,
+                    1, 0, 0, 0, 0.65, "[]", "[]", "[]", "active", now()))
 
     def rows(self, sql: str, params: Iterable[Any] = ()) -> list[dict[str, Any]]:
         with self.connection() as db:
             return [dict(row) for row in db.execute(sql, tuple(params)).fetchall()]
 
     def create_layer(self, item: LayerCreate) -> str:
+        if not self.rows("SELECT id FROM layer_types WHERE id=? AND status='active'", (item.origin_type,)):
+            raise ValueError(f"Unknown layer type: {item.origin_type}. Register it before use.")
         layer_id = str(uuid.uuid4())
         with self.connection() as db:
             db.execute("INSERT INTO layers VALUES(?,?,?,?,?)", (
@@ -103,14 +162,91 @@ class Repository:
         return node_id
 
     def create_mapping(self, item: MappingCreate) -> str:
+        relation = self.relation_type(item.relation_type)
+        if not relation or relation["status"] != "active":
+            raise ValueError(f"Unknown relation type: {item.relation_type}. Register it before use.")
+        endpoints = self.rows("""SELECT n.id,l.origin_type FROM nodes n JOIN layers l ON l.id=n.layer_id
+          WHERE n.id IN (?,?)""", (item.source_node_id, item.target_node_id))
+        endpoint_types = {row["id"]: row["origin_type"] for row in endpoints}
+        if len(endpoint_types) != 2:
+            raise ValueError("Mapping endpoints must both exist")
+        if relation["allowed_source_types"] and endpoint_types[item.source_node_id] not in relation["allowed_source_types"]:
+            raise ValueError(f"Relation {item.relation_type} does not allow this source layer type")
+        if relation["allowed_target_types"] and endpoint_types[item.target_node_id] not in relation["allowed_target_types"]:
+            raise ValueError(f"Relation {item.relation_type} does not allow this target layer type")
+        if "distinct_endpoints" in relation["validators"] and item.source_node_id == item.target_node_id:
+            raise ValueError(f"Relation {item.relation_type} requires distinct endpoints")
         mapping_id = str(uuid.uuid4())
         with self.connection() as db:
             db.execute(
-                "INSERT OR IGNORE INTO mappings VALUES(?,?,?,?,?,?,?,?)",
+                """INSERT OR IGNORE INTO mappings
+                (id,source_node_id,target_node_id,relation_type,confidence,evidence,status,
+                 attributes_json,valid_from,valid_to,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
                 (mapping_id, item.source_node_id, item.target_node_id, item.relation_type,
-                 item.confidence, item.evidence, item.status, now()),
+                 item.confidence, item.evidence, item.status,
+                 json.dumps(item.attributes, ensure_ascii=False), item.valid_from, item.valid_to, now()),
             )
         return mapping_id
+
+    def register_layer_type(self, item: LayerTypeCreate) -> str:
+        with self.connection() as db:
+            db.execute("""INSERT OR REPLACE INTO layer_types
+              (id,label,description,namespace,status,created_at) VALUES(?,?,?,?,?,?)""",
+              (item.id, item.label, item.description, item.namespace, "active", now()))
+        return item.id
+
+    def register_relation_type(self, item: RelationTypeCreate) -> str:
+        referenced_layer_types = set(item.allowed_source_types) | set(item.allowed_target_types)
+        if referenced_layer_types:
+            marks = ",".join("?" for _ in referenced_layer_types)
+            known = {row["id"] for row in self.rows(
+                f"SELECT id FROM layer_types WHERE status='active' AND id IN ({marks})",
+                sorted(referenced_layer_types),
+            )}
+            unknown = sorted(referenced_layer_types - known)
+            if unknown:
+                raise ValueError(f"Unknown endpoint layer types: {', '.join(unknown)}")
+        with self.connection() as db:
+            db.execute("""INSERT OR REPLACE INTO relation_types VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
+                item.id, item.label, item.description, item.namespace, item.inverse_type,
+                int(item.directional), int(item.symmetric), int(item.transitive), int(item.temporal),
+                item.default_traversal_weight, json.dumps(item.allowed_source_types),
+                json.dumps(item.allowed_target_types), json.dumps(item.validators), "active", now()))
+        return item.id
+
+    def import_ontology(self, bundle: OntologyBundle) -> dict[str, Any]:
+        for item in bundle.layer_types:
+            self.register_layer_type(item)
+        for item in bundle.relation_types:
+            self.register_relation_type(item)
+        return {
+            "name": bundle.name, "layer_types": len(bundle.layer_types),
+            "relation_types": len(bundle.relation_types),
+        }
+
+    def relation_type(self, type_id: str) -> dict[str, Any] | None:
+        found = self.rows("SELECT * FROM relation_types WHERE id=?", (type_id,))
+        if not found:
+            return None
+        item = found[0]
+        for key in ("allowed_source_types", "allowed_target_types", "validators"):
+            item[key] = json.loads(item.pop(f"{key}_json"))
+        for key in ("directional", "symmetric", "transitive", "temporal"):
+            item[key] = bool(item[key])
+        return item
+
+    def relation_weight(self, type_id: str) -> float:
+        item = self.relation_type(type_id)
+        return float(item["default_traversal_weight"]) if item else 0.0
+
+    def ontology_snapshot(self) -> dict[str, Any]:
+        relations = []
+        for row in self.rows("SELECT * FROM relation_types WHERE status='active' ORDER BY id"):
+            relations.append(self.relation_type(row["id"]))
+        return {
+            "layer_types": self.rows("SELECT * FROM layer_types WHERE status='active' ORDER BY id"),
+            "relation_types": relations,
+        }
 
     def get_nodes(self, node_ids: list[str]) -> list[dict[str, Any]]:
         if not node_ids:
@@ -207,4 +343,5 @@ class Repository:
             "nodes": self.rows("SELECT * FROM nodes"),
             "mappings": self.rows("SELECT * FROM mappings"),
             "shortcuts": self.rows("SELECT * FROM shortcuts"),
+            "ontology": self.ontology_snapshot(),
         }
