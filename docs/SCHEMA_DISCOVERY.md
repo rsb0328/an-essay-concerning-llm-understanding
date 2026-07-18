@@ -19,10 +19,14 @@ Allowing a model to create types without review creates the opposite failure: sy
 schemas, and hallucinated relations. Schema discovery separates observation from activation.
 
 ```text
-raw admission → readiness gate → representative sample → LLM schema survey
+raw admission → immediate provisional raw-node embedding → initial layer is searchable
+→ readiness gate → representative sample → LLM schema survey
 → compare with active ontology → repeated-sample stability → pending proposal → approve/reject
 → schema-guided cleaning and routing → embedding and mapping
 ```
+
+The readiness gate does **not** gate raw admission, canonical storage, provisional embedding, or querying of the
+historical initial layer. It gates only model-assisted schema discovery and abstraction into additional layers.
 
 The survey distinguishes four kinds of semantic dimension:
 
