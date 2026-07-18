@@ -242,35 +242,63 @@ Canonical nodes, mappings, ontology, and histories in SQLite are the memory of r
 
 ## How information moves through the system
 
-The original ideas are implemented as ordinary application logic and data—not as a hidden prompt or a skill inside one particular LLM.
+The original ideas are implemented as ordinary application logic and data—not as a hidden prompt or a skill inside one particular LLM. The diagram is deliberately divided into four interacting lifecycles: admission, optional knowledge evolution, querying, and shortcut learning. They are not one mandatory linear pipeline.
 
 ```mermaid
-flowchart TD
-    A["Unknown raw input"] --> B["Neutral input layer; preserve provenance"]
-    B --> V0["Immediately build a provisional raw-node vector index"]
-    V0 --> Q0["Historical initial layer is already searchable"]
-    V0 --> R{"Enough evidence for abstraction?"}
-    R -->|"no: keep the vectors and admit more evidence"| B
-    R -->|"yes"| SD["Rotating-sample LLM schema survey"]
-    SD --> O["Compare, repeat, review, and approve ontology changes"]
-    B --> PP["Propose and approve material placement"]
-    PP --> C
-    O --> C["Clean and route into peer layers"]
-    C --> D["Build or rebuild layer-aware vector indexes"]
-    D --> E["Optional abstraction or cross-layer comparison"]
-    E --> F["Validate and store explicit mappings"]
-    Q["User question"] --> S["Search shortcut layer first"]
-    S -->|"trusted match"| G["Guided bounded traversal"]
-    S -->|"no match"| H["Free bounded exploration"]
-    Q0 --> H
-    F --> G
-    F --> H
-    G --> I["Evidence graph"]
-    H --> I
-    I --> J["Evidence-only result or grounded generation"]
-    J --> K["Record outcome and route"]
-    K --> L["Candidate shortcut"]
-    L -->|"repeated success"| S
+flowchart TB
+    subgraph A1["A. Admission — unconditional"]
+        A["New raw material"] --> B["Append canonical raw nodes; preserve provenance"]
+        B --> V["Immediately upsert provisional raw-node vectors"]
+        V --> M["Current canonical memory plus replaceable indexes; immediately searchable"]
+    end
+
+    subgraph A2["B. Optional structure and knowledge evolution"]
+        M --> R{"Enough evidence for model-assisted discovery or abstraction?"}
+        R -->|"no"| W["No structural action; existing memory stays searchable"]
+        W -.->|"later material"| A
+        R -->|"yes"| EL["Choose an eligible operation"]
+        EL --> SD["Rotating-sample schema survey"]
+        SD --> O{"Compare, repeat, review; approve?"}
+        O -->|"approved"| C["Schema-guided cleaning and routing"]
+        O -->|"rejected"| M
+        C --> D["Upsert vectors for routed peer-layer nodes"]
+        D --> M
+        EL --> AB["Optional machine abstraction"]
+        AB --> DL["Derived peer layer plus derived-from mappings"]
+        DL --> M
+        M --> PP["Optional placement proposal for external or derived material"]
+        PP --> PA{"Approve placement?"}
+        PA -.->|"approved constraints when cleaning"| C
+        PA -->|"rejected or held"| M
+        M --> X{"Compare selected layers?"}
+        X -->|"yes"| VC["Vector similarity proposes candidate pairs"]
+        VC --> RJ["Ontology-constrained relation judgment and review"]
+        RJ --> MP["Store suggested or accepted mappings"]
+        MP --> M
+    end
+
+    subgraph A3["C. Query — works even with only the historical initial layer"]
+        Q["User question and retrieval budget"] --> S["Search independent shortcut index first"]
+        S -->|"trusted match"| G["Guided seed retrieval"]
+        S -->|"no trusted match"| H["Free semantic seed retrieval"]
+        M -.->|"node vectors"| G
+        M -.->|"node vectors"| H
+        G --> GD{"Guided route found evidence?"}
+        GD -->|"no"| H
+        GD -->|"yes"| T["Traverse zero or more accepted mappings within bounds"]
+        H --> T
+        M -.->|"accepted mappings"| T
+        T --> I["Closed evidence graph: every edge joins included nodes"]
+        I --> J["Evidence-only result or citation-validated generation"]
+        J --> K["Audit completed outcome, depth, evidence, route, and latency"]
+    end
+
+    subgraph A4["D. Shortcut learning — procedural memory"]
+        K -->|"a shortcut was attempted"| U["Update its observed success or failure and latency"]
+        K -->|"free or fallback route with non-empty evidence"| L["Candidate shortcut"]
+        L -->|"same internally valid route observed repeatedly; Alpha proxy"| AS["Active shortcut"]
+        AS -.->|"future similar question"| S
+    end
 ```
 
 ### 1. Neutral admission and schema discovery
@@ -314,13 +342,13 @@ Vector similarity proposes which elements across selected layers are worth compa
 
 ### 8. Ontology-constrained relation judgment
 
-Candidate pairs may use only active workspace relations. Direction, endpoint constraints, confidence, evidence, open attributes, validity time, and provenance are preserved. Unknown model-proposed relations remain review proposals; invalid IDs and malformed outputs fail closed rather than silently creating graph edges.
+Candidate pairs may use only active workspace relations. Direction, endpoint constraints, confidence, evidence, open attributes, validity time, and provenance are preserved. Unknown model-proposed relations remain review proposals; invalid IDs and malformed outputs fail closed rather than silently creating graph edges. Suggested mappings may be stored for review, but only mappings with `accepted` status are traversed during retrieval.
 
 ### 9. The independent shortcut layer is queried first
 
 A shortcut is stored in its own canonical table and independent `shortcuts` vector namespace, parallel to domain knowledge layers. It stores trigger examples, starting layers, preferred relation types, depth, breadth, stopping criteria, validators, failure conditions, history, and reliability. It does **not** store a canned answer or live only inside an LLM prompt.
 
-Shortcut selection combines semantic trigger similarity with observed reliability and maturity. A high-confidence match constrains retrieval before graph expansion. A partial or untrusted match must fall back to free exploration.
+Shortcut selection combines semantic trigger similarity with observed reliability and maturity and chooses the highest composite score above the threshold. A high-confidence match constrains retrieval before graph expansion. A partial or untrusted match uses free exploration, and a trusted shortcut that returns no seed evidence falls back within the same query rather than returning an empty answer.
 
 ### 10. Guided or free exploration
 
@@ -336,7 +364,7 @@ The evidence graph is ranked and bounded before it reaches a generation model. W
 
 ### 13. Route observation and shortcut learning
 
-After a successful free exploration, the application summarizes the route as a **candidate** shortcut. Similar successful routes reinforce the candidate; the reference implementation promotes it after repeated confirmation. A mature route records later successes, failures, and latency, and can be retired when it stops helping.
+After a free or fallback exploration returns a non-empty, internally consistent evidence graph, the application summarizes the route as a **candidate** shortcut. Similar observed routes reinforce the candidate; the Alpha reference implementation promotes it after three observations. This is a procedural usefulness proxy, not proof that the answer was correct. A mature route records later evidence-producing successes, empty-route failures, and latency; failed guided retrieval falls back to free exploration. Explicit user evaluation, validator execution, and automatic retirement remain future work.
 
 This closes the intended loop:
 
@@ -347,7 +375,7 @@ later similar encounter → retrieve route first → search selectively → upda
 
 ### 14. Audit, export, and rebuilding
 
-Queries record requested and reached depth, evidence IDs, shortcut use, latency, and outcome. The ontology registry, schema discoveries, layers, nodes, mappings, and shortcuts export as JSON. Vector stores are excluded because they are reproducible derived indexes.
+Completed queries record requested and reached depth, evidence IDs, shortcut use, latency, and outcome. Generation-validation failures are also recorded as failed runs before the error is returned. The ontology registry, schema discoveries, layers, nodes, mappings, and shortcuts export as JSON. Vector stores are excluded because they are reproducible derived indexes; `essay-understanding reindex` or `POST /indexes/rebuild` reconstructs current-model node and shortcut vectors from canonical SQLite records.
 
 ## Mathematical model of multi-layer mapping
 
@@ -478,6 +506,7 @@ Important next work:
 - evaluate shortcut-first retrieval with the same controlled dataset;
 - add candidate-shortcut editing, explicit rejection, retirement, and route version comparison;
 - add model-assisted shortcut descriptions without giving the model authority to activate them;
+- add explicit user outcome feedback, execute shortcut validators, and automate retirement policies;
 - implement richer import/export and document parsing adapters;
 - build a local user interface;
 - add statistically useful real-world corpora and human evaluation;
@@ -488,7 +517,7 @@ Important next work:
 - Local databases, vector indexes, uploaded sources, model caches, and `.env` files are ignored by Git.
 - Do not publish copyrighted or confidential inputs merely because their vectors were generated locally.
 - Online generation or embedding providers receive the text sent to their APIs; local operation is required for material that must not leave the machine.
-- A shortcut can reproduce a bad route. Candidate maturity, reliability, validators, failure conditions, and fallback exploration reduce this risk but do not eliminate it.
+- A shortcut can reproduce a bad route. Candidate maturity, observed reliability, and fallback exploration reduce this risk but do not eliminate it. Validators and failure conditions are stored as procedural metadata in this Alpha release, but a general policy engine does not yet execute them.
 - Similarity is not truth, mapping is not identity, and graph depth is not understanding.
 
 Security reports should follow [SECURITY.md](SECURITY.md).

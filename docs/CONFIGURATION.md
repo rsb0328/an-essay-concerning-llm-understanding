@@ -48,7 +48,9 @@ configurable Alpha guardrails, not universal statistical guarantees. See
 
 The hashing provider is deterministic and dependency-free, but it is only a functional demonstration. Do not use its benchmark scores as evidence of semantic retrieval quality.
 
-Never mix vectors from different embedding models in one index. The store namespaces collections by model; changing providers should be followed by a full index rebuild from canonical nodes and shortcut triggers.
+Never mix vectors from different embedding models in one index. The store namespaces collections by model; after
+changing providers, run `essay-understanding reindex` or call `POST /indexes/rebuild` to recreate current-model
+vectors from canonical nodes and shortcut triggers.
 
 ## Vector storage
 

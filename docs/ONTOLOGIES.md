@@ -47,5 +47,7 @@ similarity only creates candidates and never decides a domain relation by itself
 The shortcut layer is independent of every domain ontology. It is a peer procedural-memory vector namespace whose
 items describe how to retrieve, not what answer to return. A query searches it first. A reliable match restricts
 starting layers, relation types, depth, breadth, and stopping rules; a miss falls back to ordinary bounded
-multi-layer exploration. Successful free explorations create or reinforce candidate shortcuts, and repeated
-confirmation promotes them to active routes.
+multi-layer exploration. A matched route that finds no seed evidence also falls back during the same query. Free or
+fallback explorations with non-empty evidence create or reinforce candidate shortcuts; three observations promote
+the same route in the Alpha implementation. This is an internal proxy for procedural usefulness, not correctness
+feedback.

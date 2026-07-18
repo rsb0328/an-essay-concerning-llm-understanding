@@ -49,6 +49,7 @@ def main() -> None:
     clean.add_argument("--max-nodes", type=int, default=24)
     clean.add_argument("--placement-plan-id")
     sub.add_parser("status", help="Show configured providers")
+    sub.add_parser("reindex", help="Rebuild node and shortcut vectors from canonical memory")
     sub.add_parser("export", help="Export canonical memory as JSON")
     args = parser.parse_args()
     if args.command == "serve":
@@ -105,6 +106,8 @@ def main() -> None:
             "embedding": core.embedder.name,
             "vector_store": type(core.vectors).__name__,
         }, indent=2))
+    elif args.command == "reindex":
+        print(json.dumps(engine().rebuild_indexes(), ensure_ascii=False, indent=2))
     elif args.command == "export":
         print(json.dumps(engine().repository.export_all(), ensure_ascii=False, indent=2))
 

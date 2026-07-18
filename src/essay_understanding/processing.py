@@ -546,6 +546,8 @@ class KnowledgeProcessor:
                 continue
             old_to_new[index] = len(valid_units)
             valid_units.append(unit.model_copy(update={"source_node_ids": valid_ids}))
+        if not valid_units:
+            raise ValueError("Abstraction returned no units linked to valid source nodes")
         target_layer_id = self.engine.create_layer(LayerCreate(
             name=target_name, description=target_description, origin_type=target_layer_type))
         unit_ids = []
