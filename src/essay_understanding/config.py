@@ -21,6 +21,10 @@ class Settings:
     vector_store: str
     qdrant_url: str
     qdrant_path: str
+    schema_min_nodes: int
+    schema_min_chars: int
+    schema_short_record_nodes: int
+    schema_required_surveys: int
 
     @property
     def database_path(self) -> Path:
@@ -47,4 +51,8 @@ def load_settings() -> Settings:
         vector_store=os.getenv("AEC_VECTOR_STORE", "sqlite"),
         qdrant_url=os.getenv("AEC_QDRANT_URL", ""),
         qdrant_path=os.getenv("AEC_QDRANT_PATH", ""),
+        schema_min_nodes=int(os.getenv("AEC_SCHEMA_MIN_NODES", "12")),
+        schema_min_chars=int(os.getenv("AEC_SCHEMA_MIN_CHARS", "24000")),
+        schema_short_record_nodes=int(os.getenv("AEC_SCHEMA_SHORT_RECORD_NODES", "50")),
+        schema_required_surveys=int(os.getenv("AEC_SCHEMA_REQUIRED_SURVEYS", "2")),
     )

@@ -34,3 +34,12 @@ schema discovery guidance. Produce concise canonical units, assign each to an ac
 type, preserve exact source node IDs, and use only registered attribute IDs and relation IDs. Do not invent missing
 facts or silently add schema. Keep values as attributes when they do not need independent identity. Return only
 schema-valid JSON."""
+
+LAYER_PLACEMENT_SYSTEM = """Propose a provenance-preserving placement plan for supplied material.
+Classify every supplied source node at least once; a mixed source may legitimately produce multiple target
+placements. Append to an existing layer only for a genuine continuation of
+the same source and lifecycle. Material with a different author, source, version, viewpoint, access boundary, or
+lifecycle normally belongs in a peer layer. Machine-produced abstraction belongs in a derived layer and must never
+be appended to the historical initial source. Pure duplicates or citations may be link_only. Use hold_for_review
+when evidence is insufficient. The historical initial flag records chronology and provenance, not semantic
+authority. This is a proposal only; return schema-valid JSON for application validation and human approval."""

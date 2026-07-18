@@ -22,6 +22,20 @@ are request parameters rather than global settings.
 
 The endpoint should support `/chat/completions` and ideally strict JSON Schema output. Some nominally compatible servers ignore `response_format`; adapter contributions may add provider-specific handling without moving task logic into the adapter.
 
+## Abstraction readiness
+
+```env
+AEC_SCHEMA_MIN_NODES=12
+AEC_SCHEMA_MIN_CHARS=24000
+AEC_SCHEMA_SHORT_RECORD_NODES=50
+AEC_SCHEMA_REQUIRED_SURVEYS=2
+```
+
+The size rule is `nodes >= MIN_NODES AND (characters >= MIN_CHARS OR nodes >= SHORT_RECORD_NODES)`.
+New candidates must also recur across `REQUIRED_SURVEYS` differently sampled discovery rounds. These are
+configurable Alpha guardrails, not universal statistical guarantees. See
+[Abstraction readiness and material placement](ABSTRACTION_READINESS.md).
+
 ## Embeddings
 
 | Variable | Values |

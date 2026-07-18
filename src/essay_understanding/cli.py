@@ -28,6 +28,16 @@ def main() -> None:
     discover.add_argument("namespace")
     discover.add_argument("layer_ids", nargs="+")
     discover.add_argument("--sample-limit", type=int, default=24)
+    readiness = sub.add_parser("abstraction-readiness", help="Check whether source data may be abstracted")
+    readiness.add_argument("layer_ids", nargs="+")
+    placement = sub.add_parser("placement-plan", help="Propose where supplied or derived material belongs")
+    placement.add_argument("material_origin", choices=["primary_source", "external_source", "machine_derived"])
+    placement.add_argument("layer_ids", nargs="+")
+    placement.add_argument("--sample-limit", type=int, default=24)
+    placement_approve = sub.add_parser("placement-approve", help="Approve a pending placement plan")
+    placement_approve.add_argument("plan_id")
+    placement_reject = sub.add_parser("placement-reject", help="Reject a pending placement plan")
+    placement_reject.add_argument("plan_id")
     approve = sub.add_parser("schema-approve", help="Approve a pending schema discovery")
     approve.add_argument("discovery_id")
     approve.add_argument("candidate_keys", nargs="*")
@@ -37,6 +47,7 @@ def main() -> None:
     clean.add_argument("discovery_id")
     clean.add_argument("node_ids", nargs="*")
     clean.add_argument("--max-nodes", type=int, default=24)
+    clean.add_argument("--placement-plan-id")
     sub.add_parser("status", help="Show configured providers")
     sub.add_parser("export", help="Export canonical memory as JSON")
     args = parser.parse_args()
@@ -60,6 +71,20 @@ def main() -> None:
         from .processing import KnowledgeProcessor
         print(json.dumps(KnowledgeProcessor(engine()).discover_schema(
             args.layer_ids, args.namespace, args.sample_limit), ensure_ascii=False, indent=2))
+    elif args.command == "abstraction-readiness":
+        from .processing import KnowledgeProcessor
+        print(json.dumps(KnowledgeProcessor(engine()).abstraction_readiness(
+            args.layer_ids), ensure_ascii=False, indent=2))
+    elif args.command == "placement-plan":
+        from .processing import KnowledgeProcessor
+        print(json.dumps(KnowledgeProcessor(engine()).plan_material_placement(
+            args.layer_ids, args.material_origin, args.sample_limit), ensure_ascii=False, indent=2))
+    elif args.command == "placement-approve":
+        print(json.dumps(engine().repository.decide_placement_plan(
+            args.plan_id, "approved"), ensure_ascii=False, indent=2))
+    elif args.command == "placement-reject":
+        print(json.dumps(engine().repository.decide_placement_plan(
+            args.plan_id, "rejected"), ensure_ascii=False, indent=2))
     elif args.command == "schema-approve":
         selected = args.candidate_keys or None
         print(json.dumps(engine().repository.approve_schema_discovery(
@@ -71,7 +96,8 @@ def main() -> None:
         from .processing import KnowledgeProcessor
         selected = args.node_ids or None
         print(json.dumps(KnowledgeProcessor(engine()).clean_with_schema(
-            args.discovery_id, selected, args.max_nodes), ensure_ascii=False, indent=2))
+            args.discovery_id, selected, args.max_nodes, args.placement_plan_id),
+            ensure_ascii=False, indent=2))
     elif args.command == "status":
         core = engine()
         print(json.dumps({

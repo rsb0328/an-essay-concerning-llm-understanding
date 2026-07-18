@@ -19,8 +19,8 @@ Allowing a model to create types without review creates the opposite failure: sy
 schemas, and hallucinated relations. Schema discovery separates observation from activation.
 
 ```text
-raw admission → representative sample → LLM schema survey
-→ compare with active ontology → pending proposal → approve/reject
+raw admission → readiness gate → representative sample → LLM schema survey
+→ compare with active ontology → repeated-sample stability → pending proposal → approve/reject
 → schema-guided cleaning and routing → embedding and mapping
 ```
 
@@ -36,10 +36,12 @@ independently retrieved layers.
 
 ## Representative sampling
 
-`POST /process/discover-schema` samples nodes at evenly spaced offsets within each selected input layer. It limits
+`POST /process/discover-schema` first applies a configurable evidence-size gate, then samples nodes at rotating
+stratified offsets within each selected input layer. It limits
 both node count and characters per node before one structured model call. This is a bounded survey, not proof that
-rare structures have been found. Large or heterogeneous datasets should run multiple surveys over stratified
-batches and compare their proposals.
+rare structures have been found. A new candidate must recur by exact namespaced ID in at least two differently
+sampled rounds before approval. Large or heterogeneous datasets should use higher thresholds and more surveys. See
+[Abstraction readiness and material placement](ABSTRACTION_READINESS.md).
 
 ## Comparison and approval
 
@@ -48,7 +50,8 @@ Otherwise label, description, and rationale embeddings are compared with active 
 the reference threshold `0.82` is marked `possible_overlap`; lower similarity is marked `novel`.
 
 The threshold is an advisory triage heuristic, not a mathematical proof of ontology identity. Discovery never
-activates a type. `POST /ontology/schema-discoveries/{id}/approve` activates selected candidates; an empty selection
+activates a type. Approval also rejects candidates that have not met the configured survey-recurrence requirement.
+`POST /ontology/schema-discoveries/{id}/approve` activates selected candidates; an empty selection
 means only candidates recommended as novel additions. Possible overlaps require explicit selection. Rejection keeps
 an audit record without changing the ontology.
 
@@ -65,12 +68,20 @@ active ontology to the model. Output is validated before any writes:
 Validated units are routed into peer layers, embedded through the configured provider, and linked to raw inputs with
 `core:derived_from`. The raw input remains canonical evidence and is not deleted.
 
+Before routing external or machine-derived material, `POST /process/plan-placement` can create an auditable proposal.
+Different authors, sources, versions, viewpoints, access boundaries, or lifecycles default to peer layers; machine
+abstraction defaults to a derived layer; only a genuine same-source continuation may append to the historical
+initial layer. The LLM proposes while application validation and explicit approval govern.
+
 ## CLI
 
 ```bash
 essay-understanding schema-discover company RAW_LAYER_ID --sample-limit 24
 essay-understanding schema-approve DISCOVERY_ID
 essay-understanding schema-clean DISCOVERY_ID
+essay-understanding abstraction-readiness RAW_LAYER_ID
+essay-understanding placement-plan external_source RAW_LAYER_ID
+essay-understanding placement-approve PLACEMENT_PLAN_ID
 ```
 
 For large inputs, pass explicit node IDs to repeated `schema-clean` calls. A generation provider is required for the
