@@ -1,0 +1,16 @@
+cff-version: 1.2.0
+message: "If you use this software or its scaling protocol, please cite it and report your exact experimental configuration."
+title: "An Essay Concerning LLM Understanding"
+type: software
+authors:
+  - name: Sean
+version: 0.1.0
+date-released: 2026-07-18
+license: Apache-2.0
+repository-code: "https://github.com/rsb0328/an-essay-concerning-llm-understanding"
+keywords:
+  - semantic memory
+  - layered retrieval
+  - procedural memory
+  - retrieval shortcuts
+  - knowledge graphs

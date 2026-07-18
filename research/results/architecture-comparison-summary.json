@@ -1,0 +1,67 @@
+{
+  "experiment": "architecture-comparison-10-distinct-categories",
+  "date": "2026-07-18",
+  "synthetic_data": true,
+  "questions": 10,
+  "queries": 30,
+  "successes": 30,
+  "modes": {
+    "single_layer": {
+      "mean_total_ms": 5908.2759,
+      "p95_total_ms": 9274.397,
+      "mean_retrieval_ms": 73.394,
+      "mean_answer_ms": 5834.8693,
+      "mean_gold_similarity": 0.80581,
+      "mean_claim_coverage": 0.642034,
+      "mean_min_claim_coverage": 0.605483,
+      "mean_citation_alignment": 0.770266,
+      "grounded_citation_rate": 1.0,
+      "mean_evidence_nodes": 8.0,
+      "mean_layer_diversity": 1.0
+    },
+    "multi_layer": {
+      "mean_total_ms": 8386.4469,
+      "p95_total_ms": 15085.509,
+      "mean_retrieval_ms": 2253.8969,
+      "mean_answer_ms": 6132.5389,
+      "mean_gold_similarity": 0.805606,
+      "mean_claim_coverage": 0.641771,
+      "mean_min_claim_coverage": 0.605023,
+      "mean_citation_alignment": 0.795861,
+      "grounded_citation_rate": 1.0,
+      "mean_evidence_nodes": 17.2,
+      "mean_layer_diversity": 4.2
+    },
+    "multi_layer_with_procedural_skill": {
+      "mean_total_ms": 6756.7405,
+      "p95_total_ms": 12503.469,
+      "mean_retrieval_ms": 2260.2474,
+      "mean_answer_ms": 4330.0324,
+      "mean_skill_lookup_ms": 65.7213,
+      "mean_skill_routing_ms": 29.1947,
+      "mean_gold_similarity": 0.806572,
+      "mean_claim_coverage": 0.650433,
+      "mean_min_claim_coverage": 0.61531,
+      "mean_citation_alignment": 0.84441,
+      "grounded_citation_rate": 1.0,
+      "mean_evidence_nodes": 11.5,
+      "mean_layer_diversity": 3.4,
+      "skill_hit_rate": 0.4
+    }
+  },
+  "paired": {
+    "multi_vs_single": {
+      "gold_similarity_delta": -0.000205,
+      "claim_coverage_delta": -0.000263,
+      "accuracy_win_rate": 0.2,
+      "latency_ratio": 1.444694
+    },
+    "skill_vs_single": {
+      "gold_similarity_delta": 0.000761,
+      "claim_coverage_delta": 0.008399,
+      "accuracy_win_rate": 0.6,
+      "latency_ratio": 1.162788
+    }
+  }
+}
+

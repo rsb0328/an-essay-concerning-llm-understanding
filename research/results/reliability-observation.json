@@ -1,0 +1,18 @@
+{
+  "experiment": "repeated-isolated-full-chain-observation",
+  "date": "2026-07-18",
+  "attempts": 17,
+  "successes": 16,
+  "failures": 1,
+  "observed_success_rate": 0.941176,
+  "process_crashes": 0,
+  "timeouts": 0,
+  "data_pollution_events": 0,
+  "failure": {
+    "stage": "answer JSON repair",
+    "cause": "generation reached the output-token cap and returned truncated JSON",
+    "recovery": "isolated run failed closed; subsequent runs continued"
+  },
+  "notes": "This was an early prototype observation, not a population failure-rate estimate. A later 30-query architecture comparison completed with 30 successes."
+}
+

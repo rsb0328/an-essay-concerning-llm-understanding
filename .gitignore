@@ -1,0 +1,25 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+.env
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# Local knowledge, indexes, uploads, and model caches are never source code.
+data/*
+!data/.gitkeep
+uploads/
+models/
+.cache/
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+
+# Private experiment output. Curated, synthetic reports live in research/.
+reports/
+

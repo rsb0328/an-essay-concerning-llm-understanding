@@ -1,0 +1,37 @@
+name: Scaling study result
+description: Submit a reproducible result for the open scaling study.
+title: "[scaling] "
+labels: ["research", "scaling"]
+body:
+  - type: markdown
+    attributes:
+      value: "Thank you. Negative and null results are welcome. Remove private or copyrighted data before submission."
+  - type: textarea
+    id: configuration
+    attributes:
+      label: Hardware and software
+      description: CPU, GPU, memory, OS, Python, commit, models, quantization, vector store, and configuration.
+    validations:
+      required: true
+  - type: textarea
+    id: scale
+    attributes:
+      label: Dataset and graph scale
+      description: Nodes, layers, mappings, density, query count, and whether data are synthetic or public.
+    validations:
+      required: true
+  - type: textarea
+    id: protocol
+    attributes:
+      label: Protocol
+      description: Cold/warm procedure, modes, concurrency, depth, breadth, and deviations from research/SCALING_STUDY.md.
+    validations:
+      required: true
+  - type: textarea
+    id: results
+    attributes:
+      label: Results and raw-data link
+      description: Include latency percentiles, throughput, quality metrics, failures, and a link or attachment with machine-readable data.
+    validations:
+      required: true
+

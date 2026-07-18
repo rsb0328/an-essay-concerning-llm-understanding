@@ -1,0 +1,19 @@
+{
+  "schema": "aec-scaling-v1",
+  "purpose": "smoke test only; not a performance claim",
+  "synthetic": true,
+  "seed": 42,
+  "nodes": 100,
+  "layers": 5,
+  "mappings_per_node": 3,
+  "queries": 5,
+  "embedding": "hashing-384",
+  "vector_store": "sqlite",
+  "build_ms": 986.835,
+  "results": {
+    "single": {"mean_ms": 5.463, "p50_ms": 5.346, "p95_ms": 5.872, "mean_evidence_nodes": 8, "mean_depth": 0, "shortcut_hits": 0},
+    "multi": {"mean_ms": 8.258, "p50_ms": 8.275, "p95_ms": 8.319, "mean_evidence_nodes": 13, "mean_depth": 1, "shortcut_hits": 0},
+    "shortcut_first": {"mean_ms": 7.584, "p50_ms": 7.840, "p95_ms": 9.051, "mean_evidence_nodes": 13, "mean_depth": 1, "shortcut_hits": 2}
+  }
+}
+
