@@ -111,7 +111,9 @@ AEC_VECTOR_STORE=qdrant
 AEC_QDRANT_PATH=./data/qdrant
 ```
 
-The application does not require Qwen, Ollama, BGE-M3, or a particular hosted API. A provider must reliably return structured JSON for model-assisted abstraction, relation classification, and grounded answering.
+For transparency and reproducibility, the prototype experiments reported below used **Qwen3 14B deployed locally through Ollama** as the generation model, **BAAI/bge-m3** as the embedding model, **embedded Qdrant** as the vector store, and **SQLite** as the canonical structured store. That was the tested experimental configuration—not a required application stack.
+
+This repository does not require Qwen, Ollama, BGE-M3, Qdrant, or a particular hosted API. Users may connect other local models or online services through the provider interfaces. A generation provider only needs to return reliable structured JSON for model-assisted abstraction, relation classification, and grounded answering.
 
 ### A first evidence-only query
 
