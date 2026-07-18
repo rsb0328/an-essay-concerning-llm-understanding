@@ -11,17 +11,17 @@ contexts connected by explicit mappings.
 
 Schema discovery and direct machine abstraction are blocked until the selected source corpus satisfies:
 
-\[
+$$
 \operatorname{sizeReady}=N\ge 12\ \land\ (C\ge 24{,}000\ \lor\ N\ge 50),
-\]
+$$
 
-where \(N\) is canonical source-node count and \(C\) is total source characters. A proposed schema item can then be
+where $N$ is canonical source-node count and $C$ is total source characters. A proposed schema item can then be
 activated only when the same namespaced candidate ID occurs in at least two differently sampled survey rounds:
 
-\[
+$$
 \operatorname{activationReady}(x)=\operatorname{sizeReady}\land
 \operatorname{supportRounds}(x)\ge 2.
-\]
+$$
 
 The second survey rotates deterministic stratified offsets, so it does not simply reread the identical nodes. An
 approval attempt before recurrence fails closed. `POST /process/abstraction-readiness` exposes the size decision;

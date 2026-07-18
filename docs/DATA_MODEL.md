@@ -84,38 +84,38 @@ existing registries. Discovery records remain exportable audit objects.
 
 ## Mathematical retrieval model
 
-Let layer \(L_i\) contain nodes \(V_i\). An embedding function \(f_i\) maps a node into a search space, but the
+Let layer $L_i$ contain nodes $V_i$. An embedding function $f_i$ maps a node into a search space, but the
 canonical node and its provenance remain outside the vector index. The current implementation normally uses one
 replaceable embedder across layers; it does not assume that an embedding alone represents the relation between them.
 
-For a query \(q\), cosine similarity proposes seed or cross-layer candidates:
+For a query $q$, cosine similarity proposes seed or cross-layer candidates:
 
-\[
-s_0(v \mid q)=\cos(f(q),f(v)).
-\]
+$$
+s_0(v \mid q)=\cos\!\left(f(q),f(v)\right)
+$$
 
 An accepted cross-layer mapping is a property-graph edge
-\(e=(u,v,r,c,a,[t_0,t_1])\): relation type \(r\), confidence \(c\), open attributes \(a\), and optional validity
-interval. Its ontology supplies a traversal weight \(w_r\). A path \(p=(v_0,e_1,\ldots,e_k)\) is scored by the
+$e=(u,v,r,c,a,[t_0,t_1])$: relation type $r$, confidence $c$, open attributes $a$, and optional validity
+interval. Its ontology supplies a traversal weight $w_r$. A path $p=(v_0,e_1,\ldots,e_k)$ is scored by the
 implemented multiplicative propagation rule:
 
-\[
+$$
 S(p \mid q)=s_0(v_0 \mid q)\prod_{j=1}^{k}(c_{e_j}\,w_{r_j}\,\gamma),
-\qquad \gamma=0.88.
-\]
+\qquad \gamma=0.88
+$$
 
 For a newly reached node, the reference implementation then combines its own semantic relevance with path
 reliability:
 
-\[
-R(v\mid q)=0.6\cos(f(q),f(v))+0.4\max_{p\to v}S(p\mid q).
-\]
+$$
+R(v\mid q)=0.6\cos\!\left(f(q),f(v)\right)+0.4\max_{p\to v}S(p\mid q)
+$$
 
-Search is bounded by maximum depth \(D\), per-step breadth \(B\), allowed relation types, visited-node cycle
+Search is bounded by maximum depth $D$, per-step breadth $B$, allowed relation types, visited-node cycle
 control, and a minimum information-gain stopping rule. These controls make “association depth” an explicit
 research budget rather than an instruction for unlimited graph wandering.
 
-This is currently **typed weighted graph mapping**, not a learned linear transformation \(W_{ij}x\) between every
+This is currently **typed weighted graph mapping**, not a learned linear transformation $W_{ij}x$ between every
 pair of vector spaces. Future experiments may compare learned alignment matrices, contrastive cross-layer
 projections, optimal transport, or graph neural message passing. Those methods are research directions, not claims
 about what this release already implements.

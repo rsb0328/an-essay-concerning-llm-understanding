@@ -15,7 +15,7 @@
 - [Schema discovery before cleaning](#schema-discovery-before-cleaning)
 - [How information is stored](#how-information-is-stored)
 - [How information moves through the system](#how-information-moves-through-the-system)
-- [Mathematics of multi-layer mapping](#mathematics-of-multi-layer-mapping)
+- [Mathematical model of multi-layer mapping](#mathematical-model-of-multi-layer-mapping)
 - [Architecture and replaceable dependencies](#architecture-and-replaceable-dependencies)
 - [What we measured](#what-we-measured)
 - [What the present benchmark does not settle](#what-the-present-benchmark-does-not-settle)
@@ -341,29 +341,31 @@ later similar encounter → retrieve route first → search selectively → upda
 
 Queries record requested and reached depth, evidence IDs, shortcut use, latency, and outcome. The ontology registry, schema discoveries, layers, nodes, mappings, and shortcuts export as JSON. Vector stores are excluded because they are reproducible derived indexes.
 
-## Mathematics of multi-layer mapping
+## Mathematical model of multi-layer mapping
 
-Let layer \(L_i\) contain nodes \(V_i\). An embedding function \(f\) creates search candidates, with initial score
+Let layer $L_i$ contain nodes $V_i$. An embedding function $f$ creates search candidates, with initial score:
 
-\[
-s_0(v\mid q)=\cos(f(q),f(v)).
-\]
+$$
+s_0(v \mid q)=\cos\!\left(f(q),f(v)\right)
+$$
 
-An accepted mapping is a property-graph edge \(e=(u,v,r,c,a,[t_0,t_1])\): registered relation \(r\), confidence \(c\), open attributes \(a\), and optional validity interval. The ontology supplies traversal weight \(w_r\). For path \(p=(v_0,e_1,\ldots,e_k)\), the current implementation propagates:
+An accepted mapping is a property-graph edge $e=(u,v,r,c,a,[t_0,t_1])$: registered relation $r$, confidence $c$, open attributes $a$, and optional validity interval. The ontology supplies traversal weight $w_r$. For path $p=(v_0,e_1,\ldots,e_k)$, the current implementation propagates:
 
-\[
-S(p\mid q)=s_0(v_0\mid q)\prod_{j=1}^{k}(c_{e_j}w_{r_j}\gamma),\qquad \gamma=0.88.
-\]
+$$
+S(p \mid q)=s_0(v_0 \mid q)\prod_{j=1}^{k}
+\left(c_{e_j}w_{r_j}\gamma\right),\qquad \gamma=0.88
+$$
 
 For a newly reached node, the engine combines its own semantic relevance with the best path score:
 
-\[
-R(v\mid q)=0.6\cos(f(q),f(v))+0.4\max_{p\to v}S(p\mid q).
-\]
+$$
+R(v \mid q)=0.6\cos\!\left(f(q),f(v)\right)
++0.4\max_{p\to v}S(p \mid q)
+$$
 
 Maximum depth, per-step breadth, relation filters, visited-node cycle control, and minimum information gain bound the search. Association depth is therefore an explicit compute budget.
 
-This release implements **typed weighted graph mapping**, not a claimed learned linear transformation \(W_{ij}x\) between every pair of vector spaces. Learned projections, contrastive alignment, optimal transport, and graph neural message passing are possible future comparisons, not present capabilities. See [Data model and mathematics](docs/DATA_MODEL.md).
+This release implements **typed weighted graph mapping**, not a claimed learned linear transformation $W_{ij}x$ between every pair of vector spaces. Learned projections, contrastive alignment, optimal transport, and graph neural message passing are possible future comparisons, not present capabilities. See [Data model and mathematics](docs/DATA_MODEL.md).
 
 ## Architecture and replaceable dependencies
 
