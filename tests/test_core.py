@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+import sqlite3
 from pathlib import Path
 
 from essay_understanding.engine import MemoryEngine
 from essay_understanding.models import (
-    LayerCreate, MappingCreate, NodeCreate, QueryRequest, ShortcutCreate, ShortcutPlan,
+    LayerCreate, LayerTypeCreate, MappingCreate, NodeCreate, OntologyBundle, QueryRequest,
+    RelationTypeCreate, ShortcutCreate, ShortcutPlan,
 )
 from essay_understanding.providers.embeddings import HashingEmbedder
 from essay_understanding.providers.generation import DisabledGenerationProvider
@@ -27,7 +29,7 @@ class CoreTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
-    def layer(self, name: str, origin: str = "source") -> str:
+    def layer(self, name: str, origin: str = "input") -> str:
         return self.engine.create_layer(LayerCreate(name=name, origin_type=origin))
 
     def node(self, layer: str, text: str) -> str:
@@ -42,11 +44,14 @@ class CoreTests(unittest.TestCase):
         self.assertIsNone(result["answer"])
 
     def test_layers_are_peers_and_cycle_traversal_stops(self):
-        first, second, third = self.layer("Text"), self.layer("Interpretation", "human_interpretation"), self.layer("Critique", "derived")
+        first, second, third = self.layer("Input"), self.layer("External analysis", "external"), self.layer("Derived", "derived")
         a, b, c = self.node(first, "Knowledge begins from a finite perspective."), self.node(second, "Finite perspective requires selection."), self.node(third, "Selection can later be revised.")
-        self.engine.create_mapping(MappingCreate(source_node_id=a, target_node_id=b, relation_type="interprets", confidence=.9))
-        self.engine.create_mapping(MappingCreate(source_node_id=b, target_node_id=c, relation_type="extends", confidence=.9))
-        self.engine.create_mapping(MappingCreate(source_node_id=c, target_node_id=a, relation_type="refers_to", confidence=.9))
+        for relation in ("interprets", "extends", "refers_to"):
+            self.repo.register_relation_type(RelationTypeCreate(
+                id=f"test:{relation}", label=relation, namespace="test", default_traversal_weight=.9))
+        self.engine.create_mapping(MappingCreate(source_node_id=a, target_node_id=b, relation_type="test:interprets", confidence=.9))
+        self.engine.create_mapping(MappingCreate(source_node_id=b, target_node_id=c, relation_type="test:extends", confidence=.9))
+        self.engine.create_mapping(MappingCreate(source_node_id=c, target_node_id=a, relation_type="test:refers_to", confidence=.9))
         result = self.engine.query(QueryRequest(question="How can finite knowledge be revised?", max_depth=8, learn_shortcut=False))
         ids = [item["node_id"] for item in result["graph"]["nodes"]]
         self.assertEqual(len(ids), len(set(ids)))
@@ -67,6 +72,8 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(result["shortcut"]["id"], shortcut_id)
         self.assertEqual({node["node_id"] for node in result["graph"]["nodes"]}, {wanted})
         self.assertEqual(result["graph"]["depth_reached"], 0)
+        shortcut_vectors = self.repo.rows("SELECT * FROM vectors WHERE namespace='shortcuts'")
+        self.assertEqual([row["item_id"] for row in shortcut_vectors], [shortcut_id])
 
     def test_repeated_success_promotes_candidate_route(self):
         layer = self.layer("Memory")
@@ -104,7 +111,11 @@ class CoreTests(unittest.TestCase):
                         {"title": "Invalid", "content": "Invented source.",
                          "node_type": "claim", "source_node_ids": ["missing"]},
                     ],
-                    "relations": [],
+                    "relations": [
+                        {"source_unit": 0, "target_unit": 0,
+                         "relation_type": "workspace:needs_review", "confidence": .7,
+                         "evidence": "A proposed domain relation"}
+                    ],
                 }
 
         source_layer = self.layer("Source")
@@ -112,9 +123,68 @@ class CoreTests(unittest.TestCase):
         self.engine.generation = FakeGeneration()
         result = KnowledgeProcessor(self.engine).abstract_layer(source_layer, "Abstraction")
         self.assertEqual(len(result["node_ids"]), 1)
-        links = self.repo.rows("SELECT * FROM mappings WHERE relation_type='abstracted_from'")
+        self.assertEqual(result["proposed_relation_types"], ["workspace:needs_review"])
+        self.assertIsNone(self.repo.relation_type("workspace:needs_review"))
+        links = self.repo.rows("SELECT * FROM mappings WHERE relation_type='core:derived_from'")
         self.assertEqual(len(links), 1)
         self.assertEqual(links[0]["target_node_id"], source_id)
+
+    def test_domain_ontology_is_open_but_governed(self):
+        bundle = OntologyBundle(
+            name="Company",
+            layer_types=[
+                LayerTypeCreate(id="company:person", label="Person", namespace="company"),
+                LayerTypeCreate(id="company:organization", label="Organization", namespace="company"),
+            ],
+            relation_types=[RelationTypeCreate(
+                id="company:reports_to", label="reports to", namespace="company",
+                inverse_type="company:manages", default_traversal_weight=.92,
+                allowed_source_types=["company:person"],
+                allowed_target_types=["company:person", "company:organization"],
+                validators=["distinct_endpoints"],
+            )],
+        )
+        self.repo.import_ontology(bundle)
+        person_layer = self.layer("People", "company:person")
+        org_layer = self.layer("Organizations", "company:organization")
+        person, organization = self.node(person_layer, "Ava is the finance lead."), self.node(org_layer, "North division")
+        mapping = self.engine.create_mapping(MappingCreate(
+            source_node_id=person, target_node_id=organization,
+            relation_type="company:reports_to", confidence=.95,
+            attributes={"scope": "finance"}, valid_from="2026-01-01"))
+        self.assertTrue(mapping)
+        self.assertEqual(self.repo.relation_weight("company:reports_to"), .92)
+        stored = self.repo.rows("SELECT * FROM mappings WHERE id=?", (mapping,))[0]
+        self.assertEqual(stored["attributes_json"], '{"scope": "finance"}')
+        self.assertEqual(stored["valid_from"], "2026-01-01")
+        with self.assertRaisesRegex(ValueError, "Unknown relation type"):
+            self.engine.create_mapping(MappingCreate(
+                source_node_id=person, target_node_id=organization,
+                relation_type="company:invented_relation", confidence=.5))
+        with self.assertRaisesRegex(ValueError, "Unknown endpoint layer types"):
+            self.repo.register_relation_type(RelationTypeCreate(
+                id="company:bad_endpoint", label="bad endpoint", namespace="company",
+                allowed_target_types=["company:not_registered"]))
+        with self.assertRaisesRegex(ValueError, "unknown relation types"):
+            self.engine.create_shortcut(ShortcutCreate(
+                name="Invalid route", description="Must fail closed.",
+                trigger_examples=["invalid"],
+                plan=ShortcutPlan(relation_types=["company:not_registered"])))
+
+    def test_legacy_mapping_table_gains_property_and_validity_columns(self):
+        path = Path(self.temp.name) / "legacy.db"
+        db = sqlite3.connect(path)
+        try:
+            db.execute("""CREATE TABLE mappings (
+                id TEXT PRIMARY KEY, source_node_id TEXT, target_node_id TEXT,
+                relation_type TEXT, confidence REAL, evidence TEXT, status TEXT,
+                created_at TEXT)""")
+            db.commit()
+        finally:
+            db.close()
+        migrated = Repository(path)
+        columns = {row["name"] for row in migrated.rows("PRAGMA table_info(mappings)")}
+        self.assertTrue({"attributes_json", "valid_from", "valid_to"}.issubset(columns))
 
 
 if __name__ == "__main__":

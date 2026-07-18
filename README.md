@@ -1,8 +1,8 @@
 # An Essay Concerning LLM Understanding
 
-*A model-agnostic multi-layer vector storage system for interpretation, provenance, and learned routes through knowledge—its title being a deliberate nod to John Locke.*
+*A model-agnostic, domain-extensible multi-layer vector storage and retrieval system with explicit mappings and a peer shortcut layer—its title being a deliberate nod to John Locke.*
 
-[中文说明](README.zh-CN.md) · [Research data](research/) · [Scaling study](research/SCALING_STUDY.md) · [Configuration](docs/CONFIGURATION.md) · [Data model](docs/DATA_MODEL.md)
+[中文说明](README.zh-CN.md) · [Research data](research/) · [Scaling study](research/SCALING_STUDY.md) · [Configuration](docs/CONFIGURATION.md) · [Data model and mathematics](docs/DATA_MODEL.md) · [Ontologies](docs/ONTOLOGIES.md)
 
 > **Alpha research software.** The architecture runs and its core invariants are tested, but the current evidence does not establish that layered retrieval is generally faster or more accurate than flat vector search. The repository is published to make that hypothesis testable, not to present it as settled.
 
@@ -11,7 +11,9 @@
 - [What this repository is](#what-this-repository-is)
 - [Install and use it](#install-and-use-it)
 - [A working theory of understanding](#a-working-theory-of-understanding)
+- [Open domain ontologies](#open-domain-ontologies)
 - [How information moves through the system](#how-information-moves-through-the-system)
+- [Mathematics of multi-layer mapping](#mathematics-of-multi-layer-mapping)
 - [Architecture and replaceable dependencies](#architecture-and-replaceable-dependencies)
 - [What we measured](#what-we-measured)
 - [What the present benchmark does not settle](#what-the-present-benchmark-does-not-settle)
@@ -22,23 +24,24 @@
 
 ## What this repository is
 
-**This repository is first and foremost an experimental multi-layer vector storage system.** Instead of placing source passages, interpretations, abstractions, disagreements, and procedures into one undifferentiated vector layer, it organizes them as peer semantic layers connected by explicit mappings. “Multi-layer” describes the logical organization of the stored vectors and knowledge; an implementation may keep those layers in one physical collection with layer metadata or in several physical collections.
+**This repository is first and foremost an experimental, domain-extensible multi-layer vector storage and retrieval system.** Instead of placing records from different sources, types, and perspectives into one undifferentiated vector layer, it organizes them as peer semantic layers connected by explicit mappings. “Multi-layer” describes the logical organization; an implementation may keep layers in one physical collection with metadata or in several physical collections.
 
 The system is therefore more than a conventional flat vector database with extra labels. Layers remain independently selectable, comparable, traceable, and traversable, while mappings record how individual semantic elements correspond across them.
 
-It is intended for questions where *how a claim was understood* matters alongside *which passage looks similar*:
+It is not limited to text interpretation. A node may represent a passage, person, organization, project, decision, risk, metric, event, legal rule, dataset, software service, or another domain-defined unit. Example workspaces include:
 
-- a source text and several competing interpretations;
-- machine-derived abstractions and human-authored scholarship;
-- claims that are semantically similar but logically contradictory;
-- knowledge whose provenance and revision history must remain visible;
-- repeated research tasks that may benefit from learning a reusable retrieval route.
+- company memory spanning people, projects, decisions, risks, and metrics;
+- research memory spanning papers, methods, datasets, findings, and replications;
+- legal or policy memory with rules, exceptions, revisions, and validity periods;
+- software operations with services, dependencies, owners, deployments, and incidents;
+- narrative or philosophical analysis with sources, arguments, events, and competing readings.
 
 The repository provides:
 
 - a FastAPI backend and command-line interface;
 - peer knowledge layers with no permanent root layer;
 - provenance-preserving nodes and typed cross-layer mappings;
+- registries for workspace-defined layer and relation types;
 - bounded graph retrieval with depth, breadth, relation, cycle, and information-gain controls;
 - a parallel procedural-memory layer of retrieval **shortcuts**;
 - shortcut-first routing and candidate-shortcut learning after successful exploration;
@@ -126,6 +129,9 @@ essay-understanding export > memory.json
 
 See [configuration](docs/CONFIGURATION.md) for provider examples and [data model](docs/DATA_MODEL.md) for the persistent schema.
 
+Import the company example vocabulary with `essay-understanding ontology-import ontologies/company.example.json`,
+or register a workspace-specific ontology through `POST /ontology/import`.
+
 ## A working theory of understanding
 
 The project begins from a modest claim: learning often occurs by establishing a revisable correspondence between new material and structures already available to the learner.
@@ -135,12 +141,24 @@ That correspondence is not identity. A useful mapping preserves both resemblance
 Several design consequences follow:
 
 1. **There is no permanently privileged first layer.** A source can anchor a particular investigation without becoming the metaphysical root of all later understanding.
-2. **Interpretations remain distinguishable.** Human scholarship, machine abstraction, source passages, and later critique may map to one another without being collapsed into one voice.
-3. **Self-derived and externally taught knowledge are different events.** A machine-produced abstraction and a human-authored interpretation can occupy peer layers while retaining different provenance.
+2. **Perspectives remain distinguishable.** Operational records, human analysis, machine-derived units, source material, and later revision may map to one another without being collapsed into one voice.
+3. **Self-derived and externally supplied knowledge are different events.** Machine-produced structure and externally authored information can occupy peer layers while retaining different provenance.
 4. **Memory includes procedures as well as propositions.** Repeatedly discovering the same useful route should eventually create a reusable procedural memory rather than force the system to explore from zero.
 5. **Understanding develops historically.** Tentative, reinforced, revised, and retired structures should remain auditable instead of being silently overwritten.
 
 This is an implementable memory hypothesis, not a claim that vector mappings are a complete theory of human learning.
+
+## Open domain ontologies
+
+The system does not impose `supports`, `contradicts`, `interprets`, or any other vocabulary on every domain. Each
+workspace registers namespaced layer and relation types. A company may use `company:reports_to`,
+`company:approved_by`, `company:depends_on`, and `company:risk_to`; philosophy may optionally import
+`philosophy:supports` and `philosophy:interprets`.
+
+Openness is governed rather than free-form. Relation definitions declare direction, inverse, symmetry,
+transitivity, temporality, allowed endpoint types, traversal weight, and validators. Mappings may also carry open
+attributes and validity intervals. Models can select an active relation or propose an unknown namespaced type for
+review; an unknown type is never silently persisted. See [Extensible domain ontologies](docs/ONTOLOGIES.md).
 
 ## How information moves through the system
 
@@ -148,7 +166,7 @@ The original ideas are implemented as ordinary application logic and data—not 
 
 ```mermaid
 flowchart TD
-    A["Source or interpretation"] --> B["Normalize, segment, preserve provenance"]
+    A["Text, record, entity, event, or other input"] --> B["Normalize into domain units; preserve provenance"]
     B --> C["Create a peer knowledge layer"]
     C --> D["Build a replaceable vector index"]
     D --> E["Optional abstraction or cross-layer comparison"]
@@ -166,53 +184,57 @@ flowchart TD
     L -->|"repeated success"| S
 ```
 
-### 1. Admission and provenance
+### 1. Register the workspace ontology
 
-Text enters as source material, human interpretation, machine abstraction, or another declared origin. Content hashes, locations, and user-supplied provenance remain attached to canonical nodes. Generated vectors are never treated as the sole copy of knowledge.
+The workspace declares its allowed layer and relation types. The engine provides only a small structural core; company, research, legal, software, narrative, and philosophy vocabularies are data packs.
 
-### 2. Peer-layer creation
+### 2. Admission and provenance
 
-Each admitted document or interpretation can become an independent layer. A query may select a temporary reference layer, but the data model has no permanent root. This allows a later critique to address a source, an abstraction, or another interpretation directly.
+Input may arrive as text, a structured record, or adapter-normalized data. Hashes, locations, timestamps, and user-supplied provenance remain attached to canonical nodes. Generated vectors are never the sole copy of knowledge.
 
-### 3. Normalization and segmentation
+### 3. Peer-layer creation
 
-Text is normalized and split into overlapping passages while preserving passage boundaries and source pointers. Optional document parsers may extract richer structure, but the internal representation remains parser-independent.
+People, projects, policies, sources, interpretations, abstractions, or other declared categories can become independent layers. A query may select a temporary reference layer, but the model has no permanent root.
 
-### 4. Replaceable semantic indexing
+### 4. Domain-aware normalization
+
+Inputs become domain-appropriate nodes: entities, events, records, measurements, requirements, claims, or passages. Text ingestion may split overlapping passages; other adapters can preserve structured records. The canonical representation remains adapter-independent.
+
+### 5. Replaceable semantic indexing
 
 An embedding provider creates search candidates. The model name and vector dimension are index metadata, not properties of the knowledge itself. Changing embedding models requires a new index, not a new memory: canonical text, mappings, and shortcut procedures remain available for re-embedding.
 
-### 5. Two routes to a new layer
+### 6. Human-supplied and machine-derived layers
 
-A human interpretation enters as externally taught knowledge with its own author and source. A model-generated abstraction enters as self-derived knowledge: propositions, definitions, premises, conclusions, qualifications, and tensions are proposed, validated, and linked back to the exact source nodes from which they were derived.
+Externally supplied knowledge retains its author, system, and source. Model-derived units remain a separate layer and link back to exact inputs. Depending on the workspace they may be entities, events, requirements, observations, claims, or other registered units.
 
-### 6. Candidate comparison
+### 7. Candidate comparison
 
-Vector similarity proposes which elements across selected layers are worth comparing. It does not decide that they agree. This stage reduces the comparison space while remaining deliberately agnostic about logical relation.
+Vector similarity proposes which elements across selected layers are worth comparing. It does not decide that they have any domain relation. This stage reduces the comparison space while remaining relation-agnostic.
 
-### 7. Explicit relation judgment
+### 8. Ontology-constrained relation judgment
 
-Candidate pairs may be classified as support, contradiction, qualification, interpretation, derivation, analogy, reference, or another typed relation. Negation, conditions, direction, confidence, evidence, and provenance are considered. Invalid node IDs and malformed model outputs fail closed rather than silently creating graph edges.
+Candidate pairs may use only active workspace relations. Direction, endpoint constraints, confidence, evidence, open attributes, validity time, and provenance are preserved. Unknown model-proposed relations remain review proposals; invalid IDs and malformed outputs fail closed rather than silently creating graph edges.
 
-### 8. The shortcut layer is queried first
+### 9. The independent shortcut layer is queried first
 
-A shortcut is a peer procedural-memory object. It stores trigger examples, starting layers, preferred relation types, depth, breadth, stopping criteria, validators, failure conditions, history, and reliability. It does **not** store a canned answer.
+A shortcut is stored in its own canonical table and independent `shortcuts` vector namespace, parallel to domain knowledge layers. It stores trigger examples, starting layers, preferred relation types, depth, breadth, stopping criteria, validators, failure conditions, history, and reliability. It does **not** store a canned answer or live only inside an LLM prompt.
 
 Shortcut selection combines semantic trigger similarity with observed reliability and maturity. A high-confidence match constrains retrieval before graph expansion. A partial or untrusted match must fall back to free exploration.
 
-### 9. Guided or free exploration
+### 10. Guided or free exploration
 
 When a mature shortcut matches, retrieval begins where the learned route recommends. Otherwise, the system selects semantically relevant layers and seed nodes, then explores mappings. Both paths produce the same evidence-graph format and remain inspectable.
 
-### 10. Association depth and stopping
+### 11. Association depth and stopping
 
 The user sets a maximum association depth. Each traversal step may cross into another layer through an explicit mapping. Breadth limits the number of new nodes per step; relation filters limit which edges are legal; visited-node tracking prevents cycles; and low information gain can stop exploration before the maximum depth. Depth is therefore a research budget, not an instruction to wander indefinitely.
 
-### 11. Evidence budgeting and grounded synthesis
+### 12. Evidence budgeting and grounded synthesis
 
 The evidence graph is ranked and bounded before it reaches a generation model. With no model configured, the graph is the result. With a model configured, answers must cite existing evidence aliases, which are validated and translated back to canonical node IDs. Unsupported or unknown citations are rejected.
 
-### 12. Route observation and shortcut learning
+### 13. Route observation and shortcut learning
 
 After a successful free exploration, the application summarizes the route as a **candidate** shortcut. Similar successful routes reinforce the candidate; the reference implementation promotes it after repeated confirmation. A mature route records later successes, failures, and latency, and can be retired when it stops helping.
 
@@ -223,18 +245,43 @@ first encounter → explore → answer → retain the useful route
 later similar encounter → retrieve route first → search selectively → update route history
 ```
 
-### 13. Audit, export, and rebuilding
+### 14. Audit, export, and rebuilding
 
-Queries record requested and reached depth, evidence IDs, shortcut use, latency, and outcome. Canonical layers, nodes, mappings, and shortcuts export as JSON. Vector stores are excluded from that export because they are derived indexes that should be reproducible from canonical memory.
+Queries record requested and reached depth, evidence IDs, shortcut use, latency, and outcome. The ontology registry, layers, nodes, mappings, and shortcuts export as JSON. Vector stores are excluded because they are reproducible derived indexes.
+
+## Mathematics of multi-layer mapping
+
+Let layer \(L_i\) contain nodes \(V_i\). An embedding function \(f\) creates search candidates, with initial score
+
+\[
+s_0(v\mid q)=\cos(f(q),f(v)).
+\]
+
+An accepted mapping is a property-graph edge \(e=(u,v,r,c,a,[t_0,t_1])\): registered relation \(r\), confidence \(c\), open attributes \(a\), and optional validity interval. The ontology supplies traversal weight \(w_r\). For path \(p=(v_0,e_1,\ldots,e_k)\), the current implementation propagates:
+
+\[
+S(p\mid q)=s_0(v_0\mid q)\prod_{j=1}^{k}(c_{e_j}w_{r_j}\gamma),\qquad \gamma=0.88.
+\]
+
+For a newly reached node, the engine combines its own semantic relevance with the best path score:
+
+\[
+R(v\mid q)=0.6\cos(f(q),f(v))+0.4\max_{p\to v}S(p\mid q).
+\]
+
+Maximum depth, per-step breadth, relation filters, visited-node cycle control, and minimum information gain bound the search. Association depth is therefore an explicit compute budget.
+
+This release implements **typed weighted graph mapping**, not a claimed learned linear transformation \(W_{ij}x\) between every pair of vector spaces. Learned projections, contrastive alignment, optimal transport, and graph neural message passing are possible future comparisons, not present capabilities. See [Data model and mathematics](docs/DATA_MODEL.md).
 
 ## Architecture and replaceable dependencies
 
 ```text
 Application-owned core
 ├── peer layer and provenance model
-├── typed mapping model
+├── extensible layer/relation ontology registry
+├── typed property-mapping model
 ├── graph traversal and depth controller
-├── shortcut router, maturity, and history
+├── independent shortcut layer, router, maturity, and history
 ├── evidence validation
 └── canonical import/export
 
@@ -261,13 +308,13 @@ These measurements come from the earlier local prototype, which used BGE-M3, loc
 
 These are observations, not proof of a zero or 5.9% population failure rate. Seventeen attempts are far too few for a tight reliability estimate.
 
-The independent public package currently has 6/6 core tests passing. Its included 100-node scaling smoke test runs all three modes, but is explicitly too small to support an architecture claim.
+The independent public package includes isolated core tests and a 100-node scaling smoke test across all three modes, but that smoke test is explicitly too small to support an architecture claim.
 
 ### Flat, layered, and layered-plus-procedure comparison
 
 Each of ten questions ran once in each mode, for 30 queries total.
 
-| Metric | Flat single layer | Layered | Layered + procedural skill |
+| Metric | Flat single layer | Layered | Layered + shortcut layer |
 |---|---:|---:|---:|
 | Success rate | 100% | 100% | 100% |
 | Mean total latency | 5.908 s | 8.386 s | 6.757 s |
@@ -283,7 +330,7 @@ The honest conclusion is limited:
 
 - unrestricted layered retrieval was about 44% slower and did not measurably improve answer similarity or claim coverage;
 - it did expose more layers and improved citation/evidence alignment modestly;
-- the procedural skill reduced answer-generation time by about 25.8% and improved citation alignment, but end-to-end latency remained about 14.4% above the flat mean;
+- the earlier procedural-route prototype reduced answer-generation time by about 25.8% and improved citation alignment, but end-to-end latency remained about 14.4% above the flat mean;
 - the skill itself was cheap after vector reuse, but that prototype looked it up **after** full graph retrieval.
 
 This open-source version changes the order to shortcut-first. It has unit tests for that ordering, but it has not yet been subjected to the same model-backed benchmark. The old results must not be presented as evidence that the new ordering is already faster.
@@ -292,8 +339,8 @@ This open-source version changes the order to shortcut-first. It has unit tests 
 
 Ten synthetic questions on one workstation cannot determine whether the architecture wins at scale. It may remain slower for ordinary factual question answering. Its more plausible value may instead lie in dimensions a flat-answer benchmark only partially measures:
 
-- keeping sources, interpretations, abstractions, and disagreements distinct;
-- preserving contradictory evidence rather than averaging it away;
+- keeping domain records, sources, machine-derived units, and competing perspectives distinct;
+- preserving conflicts, temporal changes, and validity boundaries rather than averaging them away;
 - tracking how a knowledge structure was revised;
 - learning procedural routes across repeated related investigations;
 - exposing a query's path for audit and correction;
@@ -315,7 +362,8 @@ Implemented in this open-source package:
 
 - model-free evidence mode;
 - peer layers, nodes, provenance, and mappings;
-- model-independent abstraction and relation protocols;
+- model-independent transformation and ontology-constrained relation protocols;
+- extensible layer and relation registries with company and philosophy example packs;
 - depth/breadth/relation/cycle/information-gain traversal controls;
 - shortcut-first routing;
 - candidate shortcut creation, reinforcement, activation, and use history;
@@ -335,7 +383,7 @@ Important next work:
 ## Privacy, safety, and epistemic limits
 
 - Local databases, vector indexes, uploaded sources, model caches, and `.env` files are ignored by Git.
-- Do not publish copyrighted source texts merely because their vectors were generated locally.
+- Do not publish copyrighted or confidential inputs merely because their vectors were generated locally.
 - Online generation or embedding providers receive the text sent to their APIs; local operation is required for material that must not leave the machine.
 - A shortcut can reproduce a bad route. Candidate maturity, reliability, validators, failure conditions, and fallback exploration reduce this risk but do not eliminate it.
 - Similarity is not truth, mapping is not identity, and graph depth is not understanding.

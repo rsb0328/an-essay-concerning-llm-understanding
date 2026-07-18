@@ -1,0 +1,28 @@
+{
+  "name": "Company information example",
+  "description": "Example vocabulary for organizational knowledge. Adapt it to local governance rather than treating it as universal.",
+  "layer_types": [
+    {"id": "company:organization", "label": "Organization", "namespace": "company"},
+    {"id": "company:person", "label": "Person", "namespace": "company"},
+    {"id": "company:policy", "label": "Policy", "namespace": "company"},
+    {"id": "company:decision", "label": "Decision", "namespace": "company"},
+    {"id": "company:project", "label": "Project", "namespace": "company"},
+    {"id": "company:risk", "label": "Risk", "namespace": "company"},
+    {"id": "company:metric", "label": "Metric", "namespace": "company"},
+    {"id": "company:event", "label": "Event or meeting", "namespace": "company"}
+  ],
+  "relation_types": [
+    {"id": "company:reports_to", "label": "reports to", "namespace": "company", "inverse_type": "company:manages", "allowed_source_types": ["company:person", "company:organization"], "allowed_target_types": ["company:person", "company:organization"], "default_traversal_weight": 0.9, "validators": ["distinct_endpoints"]},
+    {"id": "company:manages", "label": "manages", "namespace": "company", "inverse_type": "company:reports_to", "allowed_source_types": ["company:person", "company:organization"], "allowed_target_types": ["company:person", "company:organization"], "default_traversal_weight": 0.9, "validators": ["distinct_endpoints"]},
+    {"id": "company:owns", "label": "owns", "namespace": "company", "allowed_source_types": ["company:organization"], "default_traversal_weight": 0.85, "validators": ["distinct_endpoints"]},
+    {"id": "company:approved_by", "label": "approved by", "namespace": "company", "inverse_type": "company:approves", "allowed_source_types": ["company:policy", "company:decision", "company:project"], "allowed_target_types": ["company:person", "company:organization"], "temporal": true, "default_traversal_weight": 0.95},
+    {"id": "company:approves", "label": "approves", "namespace": "company", "inverse_type": "company:approved_by", "allowed_source_types": ["company:person", "company:organization"], "allowed_target_types": ["company:policy", "company:decision", "company:project"], "temporal": true, "default_traversal_weight": 0.95},
+    {"id": "company:depends_on", "label": "depends on", "namespace": "company", "default_traversal_weight": 0.9, "validators": ["distinct_endpoints"]},
+    {"id": "company:blocks", "label": "blocks", "namespace": "company", "allowed_source_types": ["company:risk", "company:project"], "allowed_target_types": ["company:project", "company:decision"], "temporal": true, "default_traversal_weight": 0.85},
+    {"id": "company:risk_to", "label": "is a risk to", "namespace": "company", "allowed_source_types": ["company:risk"], "default_traversal_weight": 0.9},
+    {"id": "company:kpi_of", "label": "is a KPI of", "namespace": "company", "allowed_source_types": ["company:metric"], "allowed_target_types": ["company:organization", "company:project"], "default_traversal_weight": 0.85},
+    {"id": "company:supersedes", "label": "supersedes", "namespace": "company", "allowed_source_types": ["company:policy", "company:decision"], "allowed_target_types": ["company:policy", "company:decision"], "temporal": true, "default_traversal_weight": 0.9},
+    {"id": "company:discussed_at", "label": "discussed at", "namespace": "company", "allowed_target_types": ["company:event"], "temporal": true, "default_traversal_weight": 0.8},
+    {"id": "company:responsible_for", "label": "responsible for", "namespace": "company", "allowed_source_types": ["company:person", "company:organization"], "allowed_target_types": ["company:project", "company:metric", "company:risk"], "temporal": true, "default_traversal_weight": 0.9}
+  ]
+}

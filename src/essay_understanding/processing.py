@@ -56,7 +56,8 @@ class KnowledgeProcessor:
         self.engine = engine
 
     def abstract_layer(self, source_layer_id: str, target_name: str,
-                       target_description: str = "Machine-generated abstraction") -> dict[str, Any]:
+                       target_description: str = "Machine-derived semantic units",
+                       target_layer_type: str = "machine_derived") -> dict[str, Any]:
         if not self.engine.generation.available:
             raise RuntimeError("A generation provider is required for abstraction")
         sources = self.engine.repository.rows(
@@ -68,7 +69,8 @@ class KnowledgeProcessor:
         allowed_sources = {item["id"] for item in sources}
         raw = self.engine.generation.structured(
             system=ABSTRACTION_SYSTEM, task="semantic_abstraction",
-            payload={"source_layer_id": source_layer_id, "source_nodes": sources},
+            payload={"source_layer_id": source_layer_id, "source_nodes": sources,
+                     "active_ontology": self.engine.repository.ontology_snapshot()},
             schema=AbstractionResult.model_json_schema(),
         )
         result = AbstractionResult.model_validate(raw)
@@ -81,7 +83,7 @@ class KnowledgeProcessor:
             old_to_new[index] = len(valid_units)
             valid_units.append(unit.model_copy(update={"source_node_ids": valid_ids}))
         target_layer_id = self.engine.create_layer(LayerCreate(
-            name=target_name, description=target_description, origin_type="ai_abstraction"))
+            name=target_name, description=target_description, origin_type=target_layer_type))
         unit_ids = []
         for unit in valid_units:
             node_id = self.engine.create_node(NodeCreate(
@@ -95,11 +97,15 @@ class KnowledgeProcessor:
             for source_node_id in unit.source_node_ids:
                 self.engine.create_mapping(MappingCreate(
                     source_node_id=node_id, target_node_id=source_node_id,
-                    relation_type="abstracted_from", confidence=1.0,
-                    evidence="Explicit source pointer returned by abstraction protocol", status="accepted"))
+                    relation_type="core:derived_from", confidence=1.0,
+                    evidence="Explicit input pointer returned by transformation protocol", status="accepted"))
         internal_ids = []
+        proposed_relation_types = set()
         for relation in result.relations:
             if relation.source_unit not in old_to_new or relation.target_unit not in old_to_new:
+                continue
+            if not self.engine.repository.relation_type(relation.relation_type):
+                proposed_relation_types.add(relation.relation_type)
                 continue
             internal_ids.append(self.engine.create_mapping(MappingCreate(
                 source_node_id=unit_ids[old_to_new[relation.source_unit]],
@@ -107,7 +113,8 @@ class KnowledgeProcessor:
                 relation_type=relation.relation_type, confidence=relation.confidence,
                 evidence=relation.evidence,
             )))
-        return {"layer_id": target_layer_id, "node_ids": unit_ids, "mapping_ids": internal_ids}
+        return {"layer_id": target_layer_id, "node_ids": unit_ids, "mapping_ids": internal_ids,
+                "proposed_relation_types": sorted(proposed_relation_types)}
 
     def semantic_candidates(self, reference_layer_ids: list[str], target_layer_ids: list[str],
                             per_target: int = 4, minimum_similarity: float = 0.30) -> list[dict[str, Any]]:
@@ -140,13 +147,15 @@ class KnowledgeProcessor:
 
     def classify_candidates(self, candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if not self.engine.generation.available:
-            return [{**item, "relation_type": "semantic_candidate",
+            return [{**item, "relation_type": "core:semantic_candidate",
                      "confidence": item["similarity"], "evidence": "Embedding similarity only"}
                     for item in candidates]
         aliases = {f"P{index}": item for index, item in enumerate(candidates, 1)}
         raw = self.engine.generation.structured(
             system=RELATION_SYSTEM, task="cross_layer_relations",
-            payload={"pairs": [{
+            payload={"active_relation_types": self.engine.repository.ontology_snapshot()["relation_types"],
+                     "instructions": "Use an active relation ID, 'unrelated', or propose a new namespaced ID for review.",
+                     "pairs": [{
                 "pair_id": alias, "source": item["source_text"], "target": item["target_text"],
                 "semantic_similarity": item["similarity"],
             } for alias, item in aliases.items()]},
@@ -157,9 +166,12 @@ class KnowledgeProcessor:
         for decision in decisions.relations:
             if decision.pair_id not in aliases:
                 continue
+            registered = self.engine.repository.relation_type(decision.relation_type)
             output.append({**aliases[decision.pair_id],
                            "relation_type": decision.relation_type,
-                           "confidence": decision.confidence, "evidence": decision.evidence})
+                           "confidence": decision.confidence, "evidence": decision.evidence,
+                           "ontology_status": "registered" if registered else
+                           ("unrelated" if decision.relation_type == "unrelated" else "proposed")})
         return output
 
     def map_layers(self, reference_layer_ids: list[str], target_layer_ids: list[str],
@@ -167,13 +179,17 @@ class KnowledgeProcessor:
         candidates = self.semantic_candidates(reference_layer_ids, target_layer_ids, per_target)
         judged = self.classify_candidates(candidates)
         mapping_ids = []
+        proposed_relation_types = set()
         for item in judged:
             if item["relation_type"] == "unrelated":
+                continue
+            if not self.engine.repository.relation_type(item["relation_type"]):
+                proposed_relation_types.add(item["relation_type"])
                 continue
             mapping_ids.append(self.engine.create_mapping(MappingCreate(
                 source_node_id=item["source_node_id"], target_node_id=item["target_node_id"],
                 relation_type=item["relation_type"], confidence=item["confidence"],
                 evidence=item["evidence"], status="accepted" if accept else "suggested",
             )))
-        return {"candidate_count": len(candidates), "relations": judged, "mapping_ids": mapping_ids}
-
+        return {"candidate_count": len(candidates), "relations": judged, "mapping_ids": mapping_ids,
+                "proposed_relation_types": sorted(proposed_relation_types)}

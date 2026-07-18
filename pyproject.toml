@@ -5,12 +5,12 @@ build-backend = "hatchling.build"
 [project]
 name = "an-essay-concerning-llm-understanding"
 version = "0.1.0"
-description = "A model-agnostic, layered semantic memory with learned retrieval shortcuts."
+description = "A model-agnostic multi-layer vector store with extensible domain ontologies and learned retrieval shortcuts."
 readme = "README.md"
 requires-python = ">=3.11"
 license = {file = "LICENSE"}
 authors = [{name = "Sean"}]
-keywords = ["rag", "semantic-memory", "vector-search", "knowledge-graph", "llm"]
+keywords = ["rag", "multi-layer-vector-store", "semantic-memory", "vector-search", "knowledge-graph", "domain-ontology", "procedural-memory", "llm"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "License :: OSI Approved :: Apache Software License",
