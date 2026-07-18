@@ -247,19 +247,22 @@ The original ideas are implemented as ordinary application logic and data—not 
 ```mermaid
 flowchart TD
     A["Unknown raw input"] --> B["Neutral input layer; preserve provenance"]
-    B --> R{"Enough evidence for abstraction?"}
-    R -->|"no"| B
+    B --> V0["Immediately build a provisional raw-node vector index"]
+    V0 --> Q0["Historical initial layer is already searchable"]
+    V0 --> R{"Enough evidence for abstraction?"}
+    R -->|"no: keep the vectors and admit more evidence"| B
     R -->|"yes"| SD["Rotating-sample LLM schema survey"]
     SD --> O["Compare, repeat, review, and approve ontology changes"]
     B --> PP["Propose and approve material placement"]
     PP --> C
     O --> C["Clean and route into peer layers"]
-    C --> D["Build a replaceable vector index"]
+    C --> D["Build or rebuild layer-aware vector indexes"]
     D --> E["Optional abstraction or cross-layer comparison"]
     E --> F["Validate and store explicit mappings"]
     Q["User question"] --> S["Search shortcut layer first"]
     S -->|"trusted match"| G["Guided bounded traversal"]
     S -->|"no match"| H["Free bounded exploration"]
+    Q0 --> H
     F --> G
     F --> H
     G --> I["Evidence graph"]
@@ -273,8 +276,10 @@ flowchart TD
 ### 1. Neutral admission and schema discovery
 
 Known workspaces may import an ontology directly. Unknown material enters a neutral input layer. Its historically
-first input layer is marked `is_initial` for provenance only. The system checks abstraction readiness before a
-bounded model-assisted schema survey. Proposed layer, node, attribute, and relation dimensions remain pending.
+first input layer is marked `is_initial` for provenance only. Every admitted raw node is embedded immediately into
+a provisional index, so the initial layer is searchable even when abstraction readiness fails. The readiness gate
+controls only whether a bounded model-assisted schema survey may begin. Proposed layer, node, attribute, and
+relation dimensions remain pending.
 
 ### 2. Comparison and approval
 
@@ -292,7 +297,10 @@ Inputs become domain-appropriate nodes: entities, events, records, measurements,
 
 ### 5. Replaceable semantic indexing
 
-An embedding provider creates search candidates. The model name and vector dimension are index metadata, not properties of the knowledge itself. Changing embedding models requires a new index, not a new memory: canonical text, mappings, and shortcut procedures remain available for re-embedding.
+An embedding provider creates search candidates. Raw nodes receive provisional vectors upon admission; approved
+cleaning may then create layer-aware canonical units and their vectors. The model name and vector dimension are
+index metadata, not properties of the knowledge itself. Changing embedding models requires a new index, not a new
+memory: canonical text, mappings, and shortcut procedures remain available for re-embedding.
 
 ### 6. Human-supplied and machine-derived layers
 

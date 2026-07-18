@@ -231,10 +231,14 @@ class CoreTests(unittest.TestCase):
                 }
 
         raw = self.layer("Initial text")
-        self.node(raw, "Original source passage")
+        raw_node = self.node(raw, "Original source passage")
         processor = KnowledgeProcessor(self.engine, AbstractionReadinessPolicy(
             min_nodes=2, min_chars=1000, short_record_nodes=5, required_surveys=2))
         self.assertFalse(processor.abstraction_readiness([raw])["eligible"])
+        hits = self.engine.vectors.search(
+            "nodes", self.embedder.encode(["Original source passage"])[0], 1,
+            self.embedder.name, {"layer_id": [raw]})
+        self.assertEqual(hits[0]["item_id"], raw_node)
         self.engine.generation = PlacementGeneration()
         plan = processor.plan_material_placement([raw], "external_source", sample_limit=1)
         self.assertEqual(plan["status"], "pending")
