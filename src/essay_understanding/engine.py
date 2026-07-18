@@ -39,6 +39,28 @@ class MemoryEngine:
     def create_mapping(self, item: MappingCreate) -> str:
         return self.repository.create_mapping(item)
 
+    def rebuild_indexes(self, batch_size: int = 64) -> dict[str, int | str]:
+        """Recreate current-model node and shortcut vectors from canonical SQLite records."""
+        nodes = self.repository.rows("SELECT id,layer_id,content FROM nodes ORDER BY created_at")
+        node_count = 0
+        for start in range(0, len(nodes), batch_size):
+            batch = nodes[start:start + batch_size]
+            vectors = self.embedder.encode([item["content"] for item in batch])
+            for item, vector in zip(batch, vectors):
+                self.vectors.upsert(
+                    "nodes", item["id"], vector, {"layer_id": item["layer_id"]}, self.embedder.name)
+                node_count += 1
+        shortcuts = [self.repository.decode_shortcut(row) for row in self.repository.rows(
+            "SELECT * FROM shortcuts ORDER BY created_at")]
+        shortcut_count = 0
+        for shortcut in shortcuts:
+            trigger_vectors = self.embedder.encode(shortcut["trigger_examples"])
+            vector = np.mean(trigger_vectors, axis=0)
+            vector /= max(float(np.linalg.norm(vector)), 1e-12)
+            self.vectors.upsert("shortcuts", shortcut["id"], vector, {}, self.embedder.name)
+            shortcut_count += 1
+        return {"model": self.embedder.name, "nodes": node_count, "shortcuts": shortcut_count}
+
     def ingest_text(self, layer_id: str, title: str, text: str,
                     chunk_chars: int = 1200, overlap: int = 120,
                     provenance: dict[str, Any] | None = None) -> list[str]:
@@ -94,12 +116,14 @@ class MemoryEngine:
     def _plan_signature(plan: ShortcutPlan) -> str:
         canonical = {
             "layers": sorted(plan.start_layer_ids), "relations": sorted(plan.relation_types),
-            "depth": plan.max_depth, "breadth": plan.breadth,
+            "depth": plan.max_depth, "breadth": plan.breadth, "seed_nodes": plan.seed_nodes,
+            "stop_min_information_gain": plan.stop_min_information_gain,
         }
         return hashlib.sha256(json.dumps(canonical, sort_keys=True).encode()).hexdigest()
 
     def find_shortcut(self, question: str, threshold: float) -> dict[str, Any] | None:
         query_vector = self.embedder.encode([question])[0]
+        matches = []
         for hit in self.vectors.search("shortcuts", query_vector, 8, self.embedder.name):
             shortcut = self.repository.shortcut(hit["item_id"])
             if not shortcut or shortcut["status"] != "active":
@@ -107,8 +131,9 @@ class MemoryEngine:
             maturity = min(1.0, shortcut["confirmations"] / 5)
             composite = 0.75 * hit["score"] + 0.20 * shortcut["reliability"] + 0.05 * maturity
             if composite >= threshold:
-                return {**shortcut, "semantic_similarity": hit["score"], "match_confidence": composite}
-        return None
+                matches.append({**shortcut, "semantic_similarity": hit["score"],
+                                "match_confidence": composite})
+        return max(matches, key=lambda item: item["match_confidence"]) if matches else None
 
     def retrieve(self, question: str, plan: ShortcutPlan) -> dict[str, Any]:
         query_vector = self.embedder.encode([question])[0]
@@ -153,16 +178,13 @@ class MemoryEngine:
                     current, neighbor, direction = mapping["source_node_id"], mapping["target_node_id"], "forward"
                 else:
                     current, neighbor, direction = mapping["target_node_id"], mapping["source_node_id"], "reverse"
-                if mapping["id"] not in edge_ids:
-                    edges.append({**mapping, "from_node_id": current, "to_node_id": neighbor,
-                                  "direction": direction, "depth": level})
-                    edge_ids.add(mapping["id"])
                 if neighbor in best or current not in best:
                     continue
                 path = (best[current]["path_score"] * mapping["confidence"]
                         * self.repository.relation_weight(mapping["relation_type"]) * 0.88)
                 if neighbor not in proposed or path > proposed[neighbor]["path_score"]:
-                    proposed[neighbor] = {"path_score": path, "parent_node_id": current}
+                    proposed[neighbor] = {"path_score": path, "parent_node_id": current,
+                                          "mapping": mapping, "direction": direction}
             if not proposed:
                 stop_reason = "frontier_exhausted"
                 break
@@ -181,6 +203,13 @@ class MemoryEngine:
                 break
             frontier = []
             for combined, node_id, semantic_score in ranked[:plan.breadth]:
+                selected_mapping = proposed[node_id]["mapping"]
+                if selected_mapping["id"] not in edge_ids:
+                    edges.append({**selected_mapping,
+                                  "from_node_id": proposed[node_id]["parent_node_id"],
+                                  "to_node_id": node_id,
+                                  "direction": proposed[node_id]["direction"], "depth": level})
+                    edge_ids.add(selected_mapping["id"])
                 best[node_id] = {
                     **neighbor_records[node_id], "node_id": node_id, "score": combined,
                     "retrieval_score": semantic_score, "path_score": proposed[node_id]["path_score"],
@@ -259,15 +288,39 @@ class MemoryEngine:
             )
             mode = "free_exploration"
         graph = self.retrieve(request.question, plan)
-        answer = self._answer(request.question, graph)
+        shortcut_route_succeeded = bool(graph["nodes"])
+        if shortcut and not shortcut_route_succeeded:
+            plan = ShortcutPlan(
+                start_layer_ids=request.layer_ids or [], relation_types=request.relation_types or [],
+                max_depth=request.max_depth, breadth=request.breadth, seed_nodes=request.seed_nodes,
+            )
+            graph = self.retrieve(request.question, plan)
+            mode = "shortcut_fallback"
+        try:
+            answer = self._answer(request.question, graph)
+        except Exception:
+            elapsed_ms = (time.perf_counter() - started) * 1000
+            if shortcut:
+                self.repository.record_shortcut_run(
+                    shortcut["id"], request.question, shortcut["semantic_similarity"], False,
+                    elapsed_ms, {"depth": graph["depth_reached"], "fallback": not shortcut_route_succeeded})
+            self.repository.record_query(
+                question=request.question, mode=mode,
+                shortcut_id=shortcut["id"] if shortcut else None,
+                requested_depth=request.max_depth, reached_depth=graph["depth_reached"],
+                evidence_ids=[node["node_id"] for node in graph["nodes"]], answer=None,
+                latency_ms=elapsed_ms, success=False,
+            )
+            raise
         elapsed_ms = (time.perf_counter() - started) * 1000
         candidate_id = None
-        if request.learn_shortcut and not shortcut and graph["nodes"]:
+        if request.learn_shortcut and mode in {"free_exploration", "shortcut_fallback"} and graph["nodes"]:
             candidate_id = self._learn_candidate(request.question, graph, plan)
         if shortcut:
             self.repository.record_shortcut_run(
                 shortcut["id"], request.question, shortcut["semantic_similarity"],
-                bool(graph["nodes"]), elapsed_ms, {"depth": graph["depth_reached"]})
+                shortcut_route_succeeded, elapsed_ms,
+                {"depth": graph["depth_reached"], "fallback": not shortcut_route_succeeded})
         answer_data = answer.model_dump() if answer else None
         run_id = self.repository.record_query(
             question=request.question, mode=mode, shortcut_id=shortcut["id"] if shortcut else None,

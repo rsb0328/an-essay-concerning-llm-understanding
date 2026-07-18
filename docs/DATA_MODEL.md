@@ -71,6 +71,8 @@ SQLite data can rebuild them. A JSON export includes canonical objects and exclu
 Vectors and vector-store payloads are indexes. They may be deleted and rebuilt without changing canonical meaning.
 Every vector points back to a canonical node or shortcut ID. Shortcut vectors live in the independent `shortcuts`
 namespace, so shortcut-first routing is a real retrieval stage rather than hidden model state.
+`essay-understanding reindex` and `POST /indexes/rebuild` upsert all current-model node and shortcut vectors from
+canonical SQLite records.
 
 ## Open but governed ontology
 
@@ -99,6 +101,8 @@ $e=(u,v,r,c,a,[t_0,t_1])$: relation type $r$, confidence $c$, open attributes $a
 interval. Its ontology supplies a traversal weight $w_r$. A path $p=(v_0,e_1,\ldots,e_k)$ is scored by the
 implemented multiplicative propagation rule:
 
+Suggested mappings remain reviewable canonical records but are excluded from traversal until accepted.
+
 $$
 S(p \mid q)=s_0(v_0 \mid q)\prod_{j=1}^{k}(c_{e_j}\,w_{r_j}\,\gamma),
 \qquad \gamma=0.88
@@ -123,17 +127,18 @@ about what this release already implements.
 ## Shortcut lifecycle
 
 ```text
-free exploration
+free or failed-shortcut fallback exploration with non-empty evidence
   → candidate route in the shortcut layer
-  → repeated confirmation
+  → same internally valid route observed three times (Alpha proxy)
   → active shortcut
   → shortcut-first retrieval on a similar query
-  → success/failure history
+  → evidence-producing / empty-route history, with free fallback on an empty route
   → revision or retirement
 ```
 
-The current reference threshold promotes a repeated route after three confirmations. This is an implementation
-default, not a universal cognitive claim.
+The current reference threshold promotes a repeated route after three observations. This is an internal
+procedural-usefulness proxy, not proof that an answer was correct and not a universal cognitive claim. Explicit
+user evaluation, execution of stored validators, and automatic retirement are not yet implemented.
 
 ## Portability
 

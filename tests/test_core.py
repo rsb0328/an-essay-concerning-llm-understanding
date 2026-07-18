@@ -49,9 +49,9 @@ class CoreTests(unittest.TestCase):
         for relation in ("interprets", "extends", "refers_to"):
             self.repo.register_relation_type(RelationTypeCreate(
                 id=f"test:{relation}", label=relation, namespace="test", default_traversal_weight=.9))
-        self.engine.create_mapping(MappingCreate(source_node_id=a, target_node_id=b, relation_type="test:interprets", confidence=.9))
-        self.engine.create_mapping(MappingCreate(source_node_id=b, target_node_id=c, relation_type="test:extends", confidence=.9))
-        self.engine.create_mapping(MappingCreate(source_node_id=c, target_node_id=a, relation_type="test:refers_to", confidence=.9))
+        self.engine.create_mapping(MappingCreate(source_node_id=a, target_node_id=b, relation_type="test:interprets", confidence=.9, status="accepted"))
+        self.engine.create_mapping(MappingCreate(source_node_id=b, target_node_id=c, relation_type="test:extends", confidence=.9, status="accepted"))
+        self.engine.create_mapping(MappingCreate(source_node_id=c, target_node_id=a, relation_type="test:refers_to", confidence=.9, status="accepted"))
         result = self.engine.query(QueryRequest(question="How can finite knowledge be revised?", max_depth=8, learn_shortcut=False))
         ids = [item["node_id"] for item in result["graph"]["nodes"]]
         self.assertEqual(len(ids), len(set(ids)))
@@ -75,6 +75,82 @@ class CoreTests(unittest.TestCase):
         shortcut_vectors = self.repo.rows("SELECT * FROM vectors WHERE namespace='shortcuts'")
         self.assertEqual([row["item_id"] for row in shortcut_vectors], [shortcut_id])
 
+    def test_failed_shortcut_falls_back_to_free_exploration(self):
+        empty = self.layer("Empty learned start")
+        useful = self.layer("Useful fallback")
+        wanted = self.node(useful, "Fallback exploration can recover from a stale shortcut.")
+        shortcut_id = self.engine.create_shortcut(ShortcutCreate(
+            name="Stale route", description="Points to an empty layer.",
+            trigger_examples=["How can fallback recover?"],
+            plan=ShortcutPlan(start_layer_ids=[empty], max_depth=0), status="active"))
+        result = self.engine.query(QueryRequest(
+            question="How can fallback recover?", max_depth=0, learn_shortcut=False))
+        self.assertEqual(result["mode"], "shortcut_fallback")
+        self.assertEqual(result["shortcut"]["id"], shortcut_id)
+        self.assertEqual({node["node_id"] for node in result["graph"]["nodes"]}, {wanted})
+        run = self.repo.rows("SELECT * FROM shortcut_runs WHERE shortcut_id=?", (shortcut_id,))[0]
+        self.assertEqual(run["success"], 0)
+
+    def test_only_accepted_mappings_are_traversed_and_edges_do_not_dangle(self):
+        source = self.layer("Source")
+        related = self.layer("Related", "external")
+        a = self.node(source, "Alpha is the retrieval anchor.")
+        b = self.node(related, "Alpha has a strongly related accepted conclusion.")
+        c = self.node(related, "A suggested descendant must not become evidence.")
+        d = self.node(related, "A weak accepted alternative should lose the breadth limit.")
+        self.repo.register_relation_type(RelationTypeCreate(
+            id="test:links", label="links", namespace="test", default_traversal_weight=.9))
+        accepted = self.engine.create_mapping(MappingCreate(
+            source_node_id=a, target_node_id=b, relation_type="test:links",
+            confidence=.99, status="accepted"))
+        self.engine.create_mapping(MappingCreate(
+            source_node_id=a, target_node_id=d, relation_type="test:links",
+            confidence=.01, status="accepted"))
+        self.engine.create_mapping(MappingCreate(
+            source_node_id=b, target_node_id=c, relation_type="test:links",
+            confidence=.99, status="suggested"))
+        result = self.engine.query(QueryRequest(
+            question="What is Alpha's accepted conclusion?", layer_ids=[source],
+            seed_nodes=1, breadth=1, max_depth=3, learn_shortcut=False))
+        node_ids = {node["node_id"] for node in result["graph"]["nodes"]}
+        self.assertEqual(node_ids, {a, b})
+        self.assertEqual([edge["id"] for edge in result["graph"]["edges"]], [accepted])
+        self.assertTrue(all(edge["from_node_id"] in node_ids and edge["to_node_id"] in node_ids
+                            for edge in result["graph"]["edges"]))
+
+    def test_recreating_a_suggested_mapping_can_accept_the_same_record(self):
+        source = self.layer("Mapping source")
+        target = self.layer("Mapping target", "external")
+        a, b = self.node(source, "Source"), self.node(target, "Target")
+        self.repo.register_relation_type(RelationTypeCreate(
+            id="test:upgrade", label="upgrade", namespace="test"))
+        first = self.engine.create_mapping(MappingCreate(
+            source_node_id=a, target_node_id=b, relation_type="test:upgrade",
+            confidence=.6, status="suggested"))
+        second = self.engine.create_mapping(MappingCreate(
+            source_node_id=a, target_node_id=b, relation_type="test:upgrade",
+            confidence=.9, status="accepted"))
+        self.assertEqual(second, first)
+        stored = self.repo.rows("SELECT * FROM mappings WHERE id=?", (first,))[0]
+        self.assertEqual(stored["status"], "accepted")
+        self.assertEqual(stored["confidence"], .9)
+
+    def test_shortcut_selection_uses_best_composite_score(self):
+        first_layer = self.layer("First route")
+        second_layer = self.layer("Second route")
+        question = "Which route has the best composite score?"
+        first = self.engine.create_shortcut(ShortcutCreate(
+            name="Unreliable", description="Same trigger, poor history", trigger_examples=[question],
+            plan=ShortcutPlan(start_layer_ids=[first_layer]), status="active"))
+        second = self.engine.create_shortcut(ShortcutCreate(
+            name="Reliable", description="Same trigger, strong history", trigger_examples=[question],
+            plan=ShortcutPlan(start_layer_ids=[second_layer]), status="active"))
+        with self.repo.connection() as db:
+            db.execute("UPDATE shortcuts SET use_count=20,success_count=0 WHERE id=?", (first,))
+            db.execute("UPDATE shortcuts SET use_count=20,success_count=20 WHERE id=?", (second,))
+        selected = self.engine.find_shortcut(question, 0.0)
+        self.assertEqual(selected["id"], second)
+
     def test_repeated_success_promotes_candidate_route(self):
         layer = self.layer("Memory")
         self.node(layer, "A shortcut stores a reusable retrieval route rather than an answer.")
@@ -89,6 +165,23 @@ class CoreTests(unittest.TestCase):
         fourth = self.engine.query(request)
         self.assertEqual(fourth["mode"], "shortcut_guided")
 
+    def test_invalid_generated_answer_is_recorded_as_failed_query(self):
+        class InvalidCitationGeneration(GenerationProvider):
+            name = "invalid-citation"
+
+            def structured(self, **_):
+                return {"answer": "Unsupported", "citations": [
+                    {"node_id": "E999", "claim": "Unknown evidence"}], "uncertainties": []}
+
+        layer = self.layer("Audited source")
+        self.node(layer, "A failed answer should still leave an audit record.")
+        self.engine.generation = InvalidCitationGeneration()
+        with self.assertRaisesRegex(ValueError, "unknown evidence"):
+            self.engine.query(QueryRequest(question="Will this failure be audited?", learn_shortcut=False))
+        run = self.repo.rows("SELECT * FROM query_runs")[0]
+        self.assertEqual(run["success"], 0)
+        self.assertTrue(run["evidence_node_ids_json"])
+
     def test_export_contains_canonical_memory_not_derived_vectors(self):
         layer = self.layer("Source")
         self.node(layer, "Canonical text survives vector index replacement.")
@@ -97,6 +190,21 @@ class CoreTests(unittest.TestCase):
         self.assertIn("nodes", exported)
         self.assertIn("shortcuts", exported)
         self.assertNotIn("vectors", exported)
+
+    def test_indexes_can_be_rebuilt_from_canonical_memory(self):
+        layer = self.layer("Repairable source")
+        node = self.node(layer, "Canonical data can repair a missing vector.")
+        shortcut = self.engine.create_shortcut(ShortcutCreate(
+            name="Repairable route", description="Reindexed from triggers",
+            trigger_examples=["How is an index repaired?"],
+            plan=ShortcutPlan(start_layer_ids=[layer]), status="candidate"))
+        with self.repo.connection() as db:
+            db.execute("DELETE FROM vectors")
+        result = self.engine.rebuild_indexes(batch_size=1)
+        self.assertEqual(result["nodes"], 1)
+        self.assertEqual(result["shortcuts"], 1)
+        rows = {(row["namespace"], row["item_id"]) for row in self.repo.rows("SELECT * FROM vectors")}
+        self.assertEqual(rows, {("nodes", node), ("shortcuts", shortcut)})
 
     def test_model_assisted_abstraction_is_validated_and_source_linked(self):
         class FakeGeneration(GenerationProvider):
@@ -130,6 +238,26 @@ class CoreTests(unittest.TestCase):
         links = self.repo.rows("SELECT * FROM mappings WHERE relation_type='core:derived_from'")
         self.assertEqual(len(links), 1)
         self.assertEqual(links[0]["target_node_id"], source_id)
+
+    def test_abstraction_with_no_valid_source_links_does_not_create_empty_layer(self):
+        class UnlinkedGeneration(GenerationProvider):
+            name = "unlinked"
+
+            def structured(self, **_):
+                return {"units": [{
+                    "title": "Unlinked", "content": "No valid source",
+                    "node_type": "claim", "source_node_ids": ["missing"],
+                }], "relations": []}
+
+        source_layer = self.layer("Source")
+        self.node(source_layer, "Canonical source remains unchanged.")
+        self.engine.generation = UnlinkedGeneration()
+        processor = KnowledgeProcessor(self.engine, AbstractionReadinessPolicy(
+            min_nodes=1, min_chars=1, short_record_nodes=1, required_surveys=1))
+        before = len(self.repo.rows("SELECT * FROM layers"))
+        with self.assertRaisesRegex(ValueError, "no units linked"):
+            processor.abstract_layer(source_layer, "Must not exist")
+        self.assertEqual(len(self.repo.rows("SELECT * FROM layers")), before)
 
     def test_domain_ontology_is_open_but_governed(self):
         bundle = OntologyBundle(

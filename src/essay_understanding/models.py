@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field, model_validator
 
 
 ShortcutStatus = Literal["candidate", "active", "retired"]
+MappingStatus = Literal["suggested", "accepted", "rejected"]
 SchemaCandidateKind = Literal["layer_type", "node_type", "attribute", "relation_type"]
 TYPE_ID_PATTERN = r"^[a-z][a-z0-9_-]*(?::[a-z][a-z0-9_-]*)?$"
 
@@ -101,7 +102,7 @@ class MappingCreate(BaseModel):
     relation_type: str = Field(pattern=TYPE_ID_PATTERN)
     confidence: float = Field(ge=0, le=1)
     evidence: str = ""
-    status: str = "suggested"
+    status: MappingStatus = "suggested"
     attributes: dict[str, Any] = Field(default_factory=dict)
     valid_from: str | None = None
     valid_to: str | None = None

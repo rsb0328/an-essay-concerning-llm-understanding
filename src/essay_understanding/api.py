@@ -268,6 +268,11 @@ def query(item: QueryRequest):
     return engine().query(item)
 
 
+@app.post("/indexes/rebuild")
+def rebuild_indexes():
+    return engine().rebuild_indexes()
+
+
 @app.get("/export")
 def export_memory():
     return engine().repository.export_all()

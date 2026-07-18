@@ -271,12 +271,23 @@ class Repository:
             raise ValueError(f"Relation {item.relation_type} does not allow this target layer type")
         if "distinct_endpoints" in relation["validators"] and item.source_node_id == item.target_node_id:
             raise ValueError(f"Relation {item.relation_type} requires distinct endpoints")
-        mapping_id = str(uuid.uuid4())
+        existing = self.rows(
+            "SELECT id,status FROM mappings WHERE source_node_id=? AND target_node_id=? AND relation_type=?",
+            (item.source_node_id, item.target_node_id, item.relation_type),
+        )
+        mapping_id = existing[0]["id"] if existing else str(uuid.uuid4())
         with self.connection() as db:
             db.execute(
-                """INSERT OR IGNORE INTO mappings
+                """INSERT INTO mappings
                 (id,source_node_id,target_node_id,relation_type,confidence,evidence,status,
-                 attributes_json,valid_from,valid_to,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                 attributes_json,valid_from,valid_to,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)
+                 ON CONFLICT(source_node_id,target_node_id,relation_type) DO UPDATE SET
+                   confidence=excluded.confidence,
+                   evidence=excluded.evidence,
+                   status=CASE WHEN mappings.status='accepted' THEN 'accepted' ELSE excluded.status END,
+                   attributes_json=excluded.attributes_json,
+                   valid_from=excluded.valid_from,
+                   valid_to=excluded.valid_to""",
                 (mapping_id, item.source_node_id, item.target_node_id, item.relation_type,
                  item.confidence, item.evidence, item.status,
                  json.dumps(item.attributes, ensure_ascii=False), item.valid_from, item.valid_to, now()),
@@ -563,7 +574,7 @@ class Repository:
             relation_clause = f" AND relation_type IN ({relation_marks})"
             params.extend(relation_types)
         return self.rows(
-            f"""SELECT * FROM mappings WHERE status!='rejected' AND
+            f"""SELECT * FROM mappings WHERE status='accepted' AND
             (source_node_id IN ({marks}) OR target_node_id IN ({marks})){relation_clause}""", params)
 
     def create_shortcut(self, item: ShortcutCreate, route_signature: str) -> str:
