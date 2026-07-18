@@ -22,6 +22,45 @@ narrative analysis are ontology packs or workspaces built on the same storage an
 - **Schema discovery**: an auditable pre-cleaning survey containing representative source IDs, candidate layer/node/
   attribute/relation dimensions, comparisons with the active ontology, cleaning guidance, and approval status.
 
+## Storage topology
+
+The workspace container is not a semantic root layer. Its canonical objects form several related structures:
+
+```mermaid
+flowchart TB
+    W["Workspace"]
+    W --> O["Ontology registry"]
+    O --> LT["layer_types"]
+    O --> SD["semantic_dimensions: node types + attributes"]
+    O --> RT["relation_types"]
+
+    W --> CM["Canonical memory"]
+    CM --> L["layers"]
+    L --> N["nodes"]
+    N <-->|"source / target"| M["mappings"]
+    CM --> S["shortcuts"]
+    CM --> D["schema_discoveries"]
+    CM --> QR["query_runs"]
+    S --> SR["shortcut_runs"]
+
+    N -.-> NV["derived node vectors"]
+    S -.-> SV["derived shortcut vectors"]
+```
+
+| Logical object | Canonical physical location | Vector location |
+|---|---|---|
+| Ontology | SQLite `layer_types`, `semantic_dimensions`, `relation_types` | none |
+| Knowledge layer | SQLite `layers` | layer ID is vector payload metadata |
+| Node | SQLite `nodes` | `nodes` namespace or collection |
+| Mapping | SQLite `mappings` | none; traversed from canonical graph |
+| Shortcut | SQLite `shortcuts` and `shortcut_runs` | independent `shortcuts` namespace or collection |
+| Schema discovery | SQLite `schema_discoveries` | none |
+| Query audit | SQLite `query_runs` | none |
+
+With the default backend, vectors are rows in the SQLite `vectors` table in the same database file but remain
+logically derived. With Qdrant, they live in embedded storage or a service collection. In either case, canonical
+SQLite data can rebuild them. A JSON export includes canonical objects and excludes vectors.
+
 ## Derived objects
 
 Vectors and vector-store payloads are indexes. They may be deleted and rebuilt without changing canonical meaning.

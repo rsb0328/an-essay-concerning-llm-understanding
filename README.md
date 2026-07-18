@@ -13,6 +13,7 @@
 - [A working theory of understanding](#a-working-theory-of-understanding)
 - [Open domain ontologies](#open-domain-ontologies)
 - [Schema discovery before cleaning](#schema-discovery-before-cleaning)
+- [How information is stored](#how-information-is-stored)
 - [How information moves through the system](#how-information-moves-through-the-system)
 - [Mathematics of multi-layer mapping](#mathematics-of-multi-layer-mapping)
 - [Architecture and replaceable dependencies](#architecture-and-replaceable-dependencies)
@@ -170,6 +171,65 @@ review; an unknown type is never silently persisted. See [Extensible domain onto
 When users do not know the domain structure in advance, material first enters the neutral `input` layer with only minimal normalization and provenance preservation. A bounded LLM survey proposes four distinct kinds of dimension: layer types for independently retrieved or governed contexts, node types for stable semantic units, attributes for descriptive values, and relation types for verifiable links.
 
 Candidates are compared only with active definitions of the same kind and stored as a pending discovery. Exact matches are reused; possible semantic overlaps require explicit selection; nothing is activated by the survey itself. After approval, schema-guided cleaning validates every target layer, node type, attribute, relation, and source pointer before routing derived units into peer layers. See [Schema discovery](docs/SCHEMA_DISCOVERY.md).
+
+## How information is stored
+
+“Library → layers → data inside each layer” is the correct backbone, but not the whole topology. The workspace is a container, not a privileged semantic root. Knowledge layers are peers; nodes belong to layers; mappings cross nodes and layers; the shortcut layer is parallel procedural memory; ontology and audit records govern or describe the content rather than belonging to one knowledge layer.
+
+```mermaid
+flowchart TB
+    W["Workspace / multi-layer vector memory"]
+    W --> O["Ontology registry: what may be stored"]
+    O --> OT1["Layer types"]
+    O --> OT2["Node types and attributes"]
+    O --> OT3["Relation types and traversal weights"]
+
+    W --> K["Canonical knowledge"]
+    K --> L1["Knowledge layer A"]
+    K --> L2["Knowledge layer B"]
+    K --> LN["Knowledge layer …"]
+    L1 --> N1["Nodes: content, type, attributes, provenance, maturity"]
+    L2 --> N2["Nodes: content, type, attributes, provenance, maturity"]
+    LN --> NN["Nodes …"]
+    N1 <-->|"mapping: type, direction, confidence, evidence, validity"| N2
+    N2 <-->|"cross-layer or intra-layer mapping"| NN
+
+    W --> P["Independent shortcut layer / procedural memory"]
+    P --> PR["Triggers, starting layers, relation filters, budgets, stop rules, history"]
+
+    W --> A["Audit and evolution records"]
+    A --> A1["Schema discoveries and decisions"]
+    A --> A2["Query paths and outcomes"]
+    A --> A3["Shortcut success, failure, version, retirement"]
+
+    N1 -.-> VI["Rebuildable node vector index"]
+    N2 -.-> VI
+    NN -.-> VI
+    PR -.-> SI["Independent shortcut vector index"]
+```
+
+Physical placement is deliberately split between canonical facts and derived indexes:
+
+```mermaid
+flowchart LR
+    APP["Application backend"] --> DB["SQLite: knowledge.db"]
+    DB --> T1["Ontology tables"]
+    DB --> T2["layers / nodes / mappings"]
+    DB --> T3["shortcuts / schema discoveries / query history"]
+
+    APP --> VS{"Selected vector backend"}
+    VS --> SV["SQLite vectors table: default / small scale"]
+    VS --> QD["Qdrant: embedded directory or service"]
+    SV --> VN["nodes namespace"]
+    SV --> VP["shortcuts namespace"]
+    QD --> VN2["node collection"]
+    QD --> VP2["shortcut collection"]
+
+    DB -->|"rebuild"| VS
+    DB --> EX["Canonical JSON export"]
+```
+
+Canonical nodes, mappings, ontology, and histories in SQLite are the memory of record. The vector backend contains candidate-retrieval indexes that can be deleted and rebuilt. Qdrant does not own the conceptual data model, and neither model weights nor user source files are shipped in the repository.
 
 ## How information moves through the system
 
