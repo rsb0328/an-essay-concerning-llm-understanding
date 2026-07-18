@@ -1,6 +1,6 @@
 # An Essay Concerning LLM Understanding
 
-*A small engineering essay on layered memory, interpretation, and learned routes through knowledge—its title being a deliberate nod to John Locke.*
+*A model-agnostic multi-layer vector storage system for interpretation, provenance, and learned routes through knowledge—its title being a deliberate nod to John Locke.*
 
 [中文说明](README.zh-CN.md) · [Research data](research/) · [Scaling study](research/SCALING_STUDY.md) · [Configuration](docs/CONFIGURATION.md) · [Data model](docs/DATA_MODEL.md)
 
@@ -22,7 +22,9 @@
 
 ## What this repository is
 
-Most retrieval-augmented systems flatten source passages, interpretations, abstractions, disagreements, and procedures into one searchable space. This project keeps them as peer knowledge layers connected by explicit mappings.
+**This repository is first and foremost an experimental multi-layer vector storage system.** Instead of placing source passages, interpretations, abstractions, disagreements, and procedures into one undifferentiated vector layer, it organizes them as peer semantic layers connected by explicit mappings. “Multi-layer” describes the logical organization of the stored vectors and knowledge; an implementation may keep those layers in one physical collection with layer metadata or in several physical collections.
+
+The system is therefore more than a conventional flat vector database with extra labels. Layers remain independently selectable, comparable, traceable, and traversable, while mappings record how individual semantic elements correspond across them.
 
 It is intended for questions where *how a claim was understood* matters alongside *which passage looks similar*:
 
