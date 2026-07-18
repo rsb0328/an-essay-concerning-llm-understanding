@@ -1,6 +1,6 @@
 # 论大语言模型之理解
 
-**An Essay Concerning LLM Understanding** 是一个模型无关的多层语义记忆与程序性小径实验框架。标题是对 John Locke 的 *An Essay Concerning Human Understanding* 的致意。
+**An Essay Concerning LLM Understanding 的核心定位是一个模型无关的多层级向量存储系统。** 它同时实验多层语义记忆、跨层映射和程序性小径。标题是对 John Locke 的 *An Essay Concerning Human Understanding* 的致意。
 
 [English README](README.md) · [研究数据](research/) · [规模实验方案](research/SCALING_STUDY.md)
 
@@ -8,7 +8,9 @@
 
 ## 它做什么
 
-系统不把原文、人类解释、AI抽象、批判和程序性经验全部压进一个层级，而是将它们保存为彼此平行、可显式映射的知识层。它支持：
+这是一个实验性的**多层级向量存储**：系统不把原文、人类解释、AI抽象、批判和程序性经验全部压进一个无差别的向量层，而是将向量及其语义元素组织为彼此平行、可单独选择、可比较、可追踪和可显式映射的知识层。
+
+“多层级”指知识与向量在逻辑上的分层；底层实现既可以在同一个物理 collection 中使用层级元数据，也可以使用多个物理 collection。核心不是容器数量，而是层级之间保持区别并允许元素级映射。它支持：
 
 - 无永久根层的知识结构；
 - 来源可追踪的语义节点；
@@ -116,4 +118,3 @@ AEC_QDRANT_PATH=./data/qdrant
 项目感谢 FastAPI、Pydantic、NumPy、Sentence Transformers、Qdrant和Docling。BGE-M3与Qwen3只用于早期本地实验，不包含在仓库内，也不是运行要求。
 
 本项目采用 Apache 2.0。第三方组件保留各自许可证，详见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。本地数据库、用户原文、模型缓存、向量索引和密钥均被排除在 Git 之外。
-
