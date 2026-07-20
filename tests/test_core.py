@@ -3,9 +3,13 @@ from __future__ import annotations
 import tempfile
 import unittest
 import sqlite3
+import importlib.util
+import uuid
+from dataclasses import replace
 from pathlib import Path
 
 from essay_understanding.engine import MemoryEngine
+from essay_understanding.config import load_settings
 from essay_understanding.models import (
     LayerCreate, LayerTypeCreate, MappingCreate, NodeCreate, OntologyBundle, QueryRequest,
     RelationTypeCreate, ShortcutCreate, ShortcutPlan,
@@ -15,7 +19,7 @@ from essay_understanding.providers.generation import DisabledGenerationProvider
 from essay_understanding.providers.generation import GenerationProvider
 from essay_understanding.processing import AbstractionReadinessPolicy, KnowledgeProcessor
 from essay_understanding.repository import Repository
-from essay_understanding.vector_store import SQLiteVectorStore
+from essay_understanding.vector_store import QdrantVectorStore, SQLiteVectorStore
 
 
 class CoreTests(unittest.TestCase):
@@ -38,10 +42,11 @@ class CoreTests(unittest.TestCase):
     def test_runs_without_generation_model_and_returns_evidence(self):
         layer = self.layer("Source")
         node = self.node(layer, "A mapping is a conditional correspondence, not identity.")
-        result = self.engine.query(QueryRequest(question="Why is a mapping not identity?", learn_shortcut=False))
+        result = self.engine.query(QueryRequest(question="Why is a mapping not identity?"))
         self.assertEqual(result["generation_mode"], "evidence_only")
         self.assertEqual(result["graph"]["nodes"][0]["node_id"], node)
         self.assertIsNone(result["answer"])
+        self.assertIsNone(result["candidate_shortcut_id"])
 
     def test_layers_are_peers_and_cycle_traversal_stops(self):
         first, second, third = self.layer("Input"), self.layer("External analysis", "external"), self.layer("Derived", "derived")
@@ -152,18 +157,104 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(selected["id"], second)
 
     def test_repeated_success_promotes_candidate_route(self):
+        class GroundedGeneration(GenerationProvider):
+            name = "grounded-fake"
+
+            def structured(self, **_):
+                return {"answer": "A shortcut stores a reusable route.",
+                        "citations": [{"node_id": "E1", "claim": "The route is reusable."}],
+                        "uncertainties": []}
+
         layer = self.layer("Memory")
         self.node(layer, "A shortcut stores a reusable retrieval route rather than an answer.")
-        request = QueryRequest(question="What does a shortcut store?", max_depth=0)
-        first = self.engine.query(request)
-        second = self.engine.query(request)
-        third = self.engine.query(request)
+        self.engine.generation = GroundedGeneration()
+        requests = [QueryRequest(
+            question=question, max_depth=0, shortcut_threshold=0.0,
+            shortcut_learning_similarity=-1.0, shortcut_learning_novelty_ceiling=1.0)
+            for question in (
+                "What reusable route does a shortcut store?",
+                "How is a learned retrieval path retained?",
+                "When can the system reuse a route?",
+            )]
+        first, second, third = [self.engine.query(item) for item in requests]
         self.assertEqual(first["mode"], "free_exploration")
         self.assertEqual(second["mode"], "free_exploration")
         promoted = self.repo.shortcut(third["candidate_shortcut_id"])
         self.assertEqual(promoted["status"], "active")
-        fourth = self.engine.query(request)
+        fourth = self.engine.query(requests[0])
         self.assertEqual(fourth["mode"], "shortcut_guided")
+
+    def test_shortcut_candidate_reinforcement_requires_semantic_match_and_novel_example(self):
+        class GroundedGeneration(GenerationProvider):
+            name = "grounded-fake"
+
+            def structured(self, **_):
+                return {"answer": "Grounded", "citations": [
+                    {"node_id": "E1", "claim": "Grounded in the first item"}],
+                    "uncertainties": []}
+
+        layer = self.layer("Shared route shape")
+        self.node(layer, "Alpha is the first letter; payroll records require retention.")
+        self.engine.generation = GroundedGeneration()
+        first = QueryRequest(
+            question="What does alpha mean?", max_depth=0,
+            shortcut_learning_similarity=.95)
+        first_result = self.engine.query(first)
+        self.engine.query(first)
+        unchanged = self.repo.shortcut(first_result["candidate_shortcut_id"])
+        self.assertEqual(unchanged["confirmations"], 1)
+        second_result = self.engine.query(QueryRequest(
+            question="How should payroll tax forms be archived?", max_depth=0,
+            shortcut_learning_similarity=.95))
+        self.assertNotEqual(second_result["candidate_shortcut_id"], first_result["candidate_shortcut_id"])
+        self.assertEqual(len(self.repo.rows("SELECT id FROM shortcuts WHERE status='candidate'")), 2)
+
+    def test_graph_traversal_reuses_indexed_node_vectors(self):
+        class CountingEmbedder(HashingEmbedder):
+            def __init__(self):
+                super().__init__(384)
+                self.calls = 0
+                self.texts = 0
+
+            def encode(self, texts):
+                self.calls += 1
+                self.texts += len(texts)
+                return super().encode(texts)
+
+        embedder = CountingEmbedder()
+        engine = MemoryEngine(
+            self.repo, embedder, SQLiteVectorStore(self.repo), DisabledGenerationProvider())
+        source, target = engine.create_layer(LayerCreate(name="Vector source", origin_type="input")), engine.create_layer(
+            LayerCreate(name="Vector target", origin_type="external"))
+        first = engine.create_node(NodeCreate(layer_id=source, title="A", content="Indexed anchor evidence"))
+        second = engine.create_node(NodeCreate(layer_id=target, title="B", content="Indexed neighbor evidence"))
+        self.repo.register_relation_type(RelationTypeCreate(
+            id="test:indexed", label="indexed", namespace="test", directional=True))
+        engine.create_mapping(MappingCreate(
+            source_node_id=first, target_node_id=second, relation_type="test:indexed",
+            confidence=1, status="accepted"))
+        embedder.calls = embedder.texts = 0
+        result = engine.query(QueryRequest(
+            question="What is the indexed evidence?", layer_ids=[source], max_depth=1,
+            learn_shortcut=False))
+        self.assertEqual({item["node_id"] for item in result["graph"]["nodes"]}, {first, second})
+        self.assertEqual((embedder.calls, embedder.texts), (1, 1))
+
+    @unittest.skipUnless(importlib.util.find_spec("qdrant_client"), "qdrant extra is not installed")
+    def test_qdrant_fetch_returns_previously_indexed_vectors(self):
+        settings = replace(
+            load_settings(), data_dir=Path(self.temp.name), vector_store="qdrant",
+            qdrant_url="", qdrant_path=str(Path(self.temp.name) / "qdrant-fetch"))
+        store = QdrantVectorStore(settings, self.embedder.dimension)
+        try:
+            item_id = str(uuid.uuid4())
+            vector = self.embedder.encode(["A vector should be fetched without re-embedding."])[0]
+            store.upsert("nodes", item_id, vector, {"layer_id": "test"}, self.embedder.name)
+            fetched = store.fetch("nodes", [item_id, str(uuid.uuid4())], self.embedder.name)
+            self.assertEqual(set(fetched), {item_id})
+            self.assertAlmostEqual(float(fetched[item_id] @ vector), 1.0, places=5)
+        finally:
+            store.close()
 
     def test_invalid_generated_answer_is_recorded_as_failed_query(self):
         class InvalidCitationGeneration(GenerationProvider):
@@ -300,6 +391,33 @@ class CoreTests(unittest.TestCase):
                 name="Invalid route", description="Must fail closed.",
                 trigger_examples=["invalid"],
                 plan=ShortcutPlan(relation_types=["company:not_registered"])))
+
+    def test_traversal_enforces_relation_direction_and_validity_time(self):
+        source_layer, target_layer = self.layer("Directional source"), self.layer(
+            "Directional target", "external")
+        source = self.node(source_layer, "A policy source states the governing rule.")
+        target = self.node(target_layer, "A policy target records its consequence.")
+        self.repo.register_relation_type(RelationTypeCreate(
+            id="test:governs", label="governs", namespace="test",
+            directional=True, temporal=True, default_traversal_weight=1))
+        self.engine.create_mapping(MappingCreate(
+            source_node_id=source, target_node_id=target, relation_type="test:governs",
+            confidence=1, status="accepted", valid_from="2030-01-01", valid_to="2040-01-01"))
+
+        too_early = self.engine.query(QueryRequest(
+            question="What consequence does the governing policy have?",
+            layer_ids=[source_layer], max_depth=1, as_of="2029-12-31", learn_shortcut=False))
+        self.assertEqual({item["node_id"] for item in too_early["graph"]["nodes"]}, {source})
+
+        forward = self.engine.query(QueryRequest(
+            question="What consequence does the governing policy have?",
+            layer_ids=[source_layer], max_depth=1, as_of="2035-01-01", learn_shortcut=False))
+        self.assertEqual({item["node_id"] for item in forward["graph"]["nodes"]}, {source, target})
+
+        reverse = self.engine.query(QueryRequest(
+            question="What consequence is recorded by the policy target?",
+            layer_ids=[target_layer], max_depth=1, as_of="2035-01-01", learn_shortcut=False))
+        self.assertEqual({item["node_id"] for item in reverse["graph"]["nodes"]}, {target})
 
     def test_legacy_mapping_table_gains_property_and_validity_columns(self):
         path = Path(self.temp.name) / "legacy.db"
@@ -440,7 +558,7 @@ class CoreTests(unittest.TestCase):
             processor.clean_with_schema(discovery["id"], max_nodes=4)
 
         keys = [f"{item['kind']}:{item['id']}" for item in discovery["candidates"]]
-        with self.assertRaisesRegex(ValueError, "enough independent surveys"):
+        with self.assertRaisesRegex(ValueError, "enough rotating-sample surveys"):
             self.repo.approve_schema_discovery(discovery["id"], keys)
         confirmation = processor.discover_schema(
             [raw], "company", sample_limit=4, max_chars_per_node=500)

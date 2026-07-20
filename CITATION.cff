@@ -4,8 +4,8 @@ title: "An Essay Concerning LLM Understanding"
 type: software
 authors:
   - name: Sean
-version: 0.1.0
-date-released: 2026-07-18
+version: 0.2.0
+date-released: 2026-07-19
 license: Apache-2.0
 repository-code: "https://github.com/rsb0328/an-essay-concerning-llm-understanding"
 keywords:

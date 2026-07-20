@@ -21,7 +21,7 @@ schemas, and hallucinated relations. Schema discovery separates observation from
 ```text
 raw admission → immediate provisional raw-node embedding → initial layer is searchable
 → readiness gate → representative sample → LLM schema survey
-→ compare with active ontology → repeated-sample stability → pending proposal → approve/reject
+→ compare with active ontology → rotating-sample recurrence gate → pending proposal → approve/reject
 → schema-guided cleaning and routing → embedding and mapping
 ```
 
@@ -43,8 +43,10 @@ independently retrieved layers.
 `POST /process/discover-schema` first applies a configurable evidence-size gate, then samples nodes at rotating
 stratified offsets within each selected input layer. It limits
 both node count and characters per node before one structured model call. This is a bounded survey, not proof that
-rare structures have been found. A new candidate must recur by exact namespaced ID in at least two differently
-sampled rounds before approval. Large or heterogeneous datasets should use higher thresholds and more surveys. See
+rare structures have been found. A new candidate must recur by exact namespaced ID in at least two rotating-sample
+rounds before approval. Those rounds share a model and protocol: recurrence is a variance guardrail, not an
+independence assumption, significance test, or protection against shared model bias. Large or heterogeneous
+datasets should use higher thresholds and more surveys. See
 [Abstraction readiness and material placement](ABSTRACTION_READINESS.md).
 
 ## Comparison and approval
@@ -98,5 +100,7 @@ without one.
 - Similarity does not determine whether two concepts are operationally equivalent.
 - Approval is currently a whole discovery decision with an optional candidate subset, not a multi-user governance
   workflow.
+- Mandatory per-proposal approval is not a scalable million-node governance strategy; risk-tiered batches and
+  sampled audits remain future work.
 - Approved schema changes do not automatically reprocess every historical node; re-cleaning is an explicit batch
   operation.

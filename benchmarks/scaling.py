@@ -87,20 +87,28 @@ def main() -> None:
     }
     results = {}
     for mode, parameters in modes.items():
-        timings, nodes, depths, hits = [], [], [], 0
+        timings, nodes, depths, hits, shortcut_attempts, false_routes, wasted = [], [], [], 0, 0, 0, []
         for question in questions:
             result = engine.query(QueryRequest(question=question, **parameters))
             timings.append(result["latency_ms"])
             nodes.append(len(result["graph"]["nodes"]))
             depths.append(result["graph"]["depth_reached"])
             hits += int(result["mode"] == "shortcut_guided")
+            diagnostics = result["shortcut_diagnostics"]
+            shortcut_attempts += int(diagnostics["attempted"])
+            false_routes += int(diagnostics["false_route"])
+            wasted.append(float(diagnostics["wasted_ms"]))
         results[mode] = {
             "mean_ms": statistics.mean(timings), "p50_ms": percentile(timings, .50),
             "p95_ms": percentile(timings, .95), "mean_evidence_nodes": statistics.mean(nodes),
             "mean_depth": statistics.mean(depths), "shortcut_hits": hits,
+            "shortcut_attempts": shortcut_attempts,
+            "shortcut_false_routes": false_routes,
+            "shortcut_false_route_rate": false_routes / max(1, shortcut_attempts),
+            "mean_wasted_shortcut_ms": statistics.mean(wasted),
         }
     output = {
-        "schema": "aec-scaling-v1", "synthetic": True, "seed": args.seed,
+        "schema": "aec-scaling-v2", "synthetic": True, "seed": args.seed,
         "nodes": args.nodes, "layers": args.layers,
         "mappings_per_node": args.mappings_per_node, "queries": args.queries,
         "embedding": embedder.name, "vector_store": "sqlite", "build_ms": build_ms,

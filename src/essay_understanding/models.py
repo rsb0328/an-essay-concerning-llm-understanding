@@ -115,6 +115,8 @@ class ShortcutPlan(BaseModel):
     breadth: int = Field(default=5, ge=1, le=50)
     seed_nodes: int = Field(default=8, ge=1, le=100)
     stop_min_information_gain: float = Field(default=0.03, ge=0, le=1)
+    semantic_weight: float = Field(default=0.6, ge=0, le=1)
+    path_decay: float = Field(default=0.88, gt=0, le=1)
 
 
 class ShortcutCreate(BaseModel):
@@ -136,6 +138,9 @@ class QueryRequest(BaseModel):
     layer_ids: list[str] | None = None
     relation_types: list[str] | None = None
     shortcut_threshold: float = Field(default=0.72, ge=0, le=1)
+    shortcut_learning_similarity: float = Field(default=0.78, ge=-1, le=1)
+    shortcut_learning_novelty_ceiling: float = Field(default=0.995, ge=-1, le=1)
+    as_of: str | None = None
     learn_shortcut: bool = True
 
 

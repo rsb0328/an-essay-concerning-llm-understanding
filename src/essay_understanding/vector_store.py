@@ -20,6 +20,10 @@ class VectorStore(ABC):
                filters: dict[str, Any] | None = None) -> list[dict[str, Any]]: ...
 
     @abstractmethod
+    def fetch(self, namespace: str, item_ids: list[str], model: str) -> dict[str, np.ndarray]:
+        """Return already indexed vectors without invoking the embedding model."""
+
+    @abstractmethod
     def delete(self, namespace: str, item_id: str, model: str) -> None: ...
 
     def close(self) -> None:
@@ -54,6 +58,16 @@ class SQLiteVectorStore(VectorStore):
                 continue
             hits.append({"item_id": row["item_id"], "score": float(vector @ query), **payload})
         return sorted(hits, key=lambda hit: hit["score"], reverse=True)[:limit]
+
+    def fetch(self, namespace: str, item_ids: list[str], model: str) -> dict[str, np.ndarray]:
+        if not item_ids:
+            return {}
+        marks = ",".join("?" for _ in item_ids)
+        rows = self.repository.rows(
+            f"SELECT item_id,vector_json FROM vectors WHERE namespace=? AND model=? "
+            f"AND item_id IN ({marks})", (namespace, model, *item_ids))
+        return {row["item_id"]: np.asarray(json.loads(row["vector_json"]), dtype=np.float32)
+                for row in rows}
 
     def delete(self, namespace: str, item_id: str, model: str) -> None:
         with self.repository.connection() as db:
@@ -104,6 +118,23 @@ class QdrantVectorStore(VectorStore):
             collection, query=np.asarray(query).tolist(), limit=limit,
             query_filter=self.models.Filter(must=must) if must else None, with_payload=True).points
         return [{"item_id": str(point.id), "score": float(point.score), **(point.payload or {})} for point in found]
+
+    def fetch(self, namespace: str, item_ids: list[str], model: str) -> dict[str, np.ndarray]:
+        if not item_ids:
+            return {}
+        collection = self._collection(namespace, model)
+        if not self.client.collection_exists(collection):
+            return {}
+        points = self.client.retrieve(
+            collection_name=collection, ids=item_ids, with_vectors=True, with_payload=False)
+        output: dict[str, np.ndarray] = {}
+        for point in points:
+            vector = point.vector
+            if isinstance(vector, dict):
+                vector = next(iter(vector.values()), None)
+            if vector is not None:
+                output[str(point.id)] = np.asarray(vector, dtype=np.float32)
+        return output
 
     def delete(self, namespace: str, item_id: str, model: str) -> None:
         collection = self._collection(namespace, model)

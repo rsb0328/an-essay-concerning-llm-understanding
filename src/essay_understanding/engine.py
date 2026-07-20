@@ -118,11 +118,13 @@ class MemoryEngine:
             "layers": sorted(plan.start_layer_ids), "relations": sorted(plan.relation_types),
             "depth": plan.max_depth, "breadth": plan.breadth, "seed_nodes": plan.seed_nodes,
             "stop_min_information_gain": plan.stop_min_information_gain,
+            "semantic_weight": plan.semantic_weight, "path_decay": plan.path_decay,
         }
         return hashlib.sha256(json.dumps(canonical, sort_keys=True).encode()).hexdigest()
 
-    def find_shortcut(self, question: str, threshold: float) -> dict[str, Any] | None:
-        query_vector = self.embedder.encode([question])[0]
+    def find_shortcut(self, question: str, threshold: float,
+                      query_vector: np.ndarray | None = None) -> dict[str, Any] | None:
+        query_vector = query_vector if query_vector is not None else self.embedder.encode([question])[0]
         matches = []
         for hit in self.vectors.search("shortcuts", query_vector, 8, self.embedder.name):
             shortcut = self.repository.shortcut(hit["item_id"])
@@ -135,11 +137,16 @@ class MemoryEngine:
                                 "match_confidence": composite})
         return max(matches, key=lambda item: item["match_confidence"]) if matches else None
 
-    def retrieve(self, question: str, plan: ShortcutPlan) -> dict[str, Any]:
-        query_vector = self.embedder.encode([question])[0]
+    def retrieve(self, question: str, plan: ShortcutPlan,
+                 query_vector: np.ndarray | None = None,
+                 initial_hits: list[dict[str, Any]] | None = None,
+                 as_of: str | None = None) -> dict[str, Any]:
+        query_vector = query_vector if query_vector is not None else self.embedder.encode([question])[0]
         filters = {"layer_id": set(plan.start_layer_ids)} if plan.start_layer_ids else None
-        initial = self.vectors.search("nodes", query_vector, max(30, plan.seed_nodes * 4),
-                                      self.embedder.name, filters)
+        initial = initial_hits if initial_hits is not None else self.vectors.search(
+            "nodes", query_vector, max(30, plan.seed_nodes * 4), self.embedder.name, filters)
+        if filters:
+            initial = [hit for hit in initial if hit.get("layer_id") in filters["layer_id"]]
         layer_scores: dict[str, list[float]] = defaultdict(list)
         for hit in initial:
             layer_scores[hit["layer_id"]].append(hit["score"])
@@ -169,19 +176,24 @@ class MemoryEngine:
         depth_reached = 0
         stop_reason = "max_depth"
         information_gain: list[float] = []
+        initial_scores = np.asarray([float(hit["score"]) for hit in initial], dtype=np.float32)
+        score_baseline = float(np.median(initial_scores)) if len(initial_scores) else 0.0
+        score_scale = max(float(np.max(initial_scores)) - score_baseline, 1e-6) if len(initial_scores) else 1.0
 
         for level in range(1, plan.max_depth + 1):
-            mappings = self.repository.mappings_from(frontier, plan.relation_types or None)
+            mappings = self.repository.mappings_from(frontier, plan.relation_types or None, as_of)
             proposed: dict[str, dict[str, Any]] = {}
             for mapping in mappings:
                 if mapping["source_node_id"] in frontier:
                     current, neighbor, direction = mapping["source_node_id"], mapping["target_node_id"], "forward"
                 else:
+                    if mapping["directional"] and not mapping["symmetric"]:
+                        continue
                     current, neighbor, direction = mapping["target_node_id"], mapping["source_node_id"], "reverse"
                 if neighbor in best or current not in best:
                     continue
                 path = (best[current]["path_score"] * mapping["confidence"]
-                        * self.repository.relation_weight(mapping["relation_type"]) * 0.88)
+                        * self.repository.relation_weight(mapping["relation_type"]) * plan.path_decay)
                 if neighbor not in proposed or path > proposed[neighbor]["path_score"]:
                     proposed[neighbor] = {"path_score": path, "parent_node_id": current,
                                           "mapping": mapping, "direction": direction}
@@ -190,13 +202,27 @@ class MemoryEngine:
                 break
             neighbor_records = {row["id"]: row for row in self.repository.get_nodes(list(proposed))}
             valid = [node_id for node_id in proposed if node_id in neighbor_records]
-            semantic = self.embedder.encode([neighbor_records[node_id]["content"] for node_id in valid]) @ query_vector
+            if not valid:
+                stop_reason = "frontier_records_missing"
+                break
+            stored = self.vectors.fetch("nodes", valid, self.embedder.name)
+            missing = [node_id for node_id in valid if node_id not in stored]
+            if missing:
+                repaired = self.embedder.encode([neighbor_records[node_id]["content"] for node_id in missing])
+                for node_id, vector in zip(missing, repaired):
+                    stored[node_id] = vector
+                    self.vectors.upsert("nodes", node_id, vector,
+                                        {"layer_id": neighbor_records[node_id]["layer_id"]}, self.embedder.name)
+            semantic = np.asarray([stored[node_id] for node_id in valid]) @ query_vector
             ranked = []
             for node_id, semantic_score in zip(valid, semantic):
-                combined = 0.6 * float(semantic_score) + 0.4 * proposed[node_id]["path_score"]
+                combined = (plan.semantic_weight * float(semantic_score)
+                            + (1 - plan.semantic_weight) * proposed[node_id]["path_score"])
                 ranked.append((combined, node_id, float(semantic_score)))
             ranked.sort(reverse=True)
-            gain = sum(max(0.0, score - 0.40) for score, _, _ in ranked[:plan.breadth]) / max(1, min(plan.breadth, len(ranked)))
+            selected_semantic = [semantic_score for _, _, semantic_score in ranked[:plan.breadth]]
+            gain = sum(min(1.0, max(0.0, (score - score_baseline) / score_scale))
+                       for score in selected_semantic) / max(1, len(selected_semantic))
             information_gain.append(gain)
             if level > 1 and gain < plan.stop_min_information_gain:
                 stop_reason = "low_information_gain"
@@ -246,8 +272,13 @@ class MemoryEngine:
                           for citation in result.citations]
         })
 
-    def _learn_candidate(self, question: str, graph: dict[str, Any], plan: ShortcutPlan) -> str | None:
-        if not graph["nodes"]:
+    def _learn_candidate(self, question: str, graph: dict[str, Any], plan: ShortcutPlan,
+                         query_vector: np.ndarray, answer: GroundedAnswer | None,
+                         similarity_threshold: float,
+                         novelty_ceiling: float) -> str | None:
+        # Automatic route learning requires a grounded outcome. Merely returning any
+        # node is not evidence that the route answered the question.
+        if not graph["nodes"] or answer is None or not answer.citations:
             return None
         traversed_relations = sorted({edge["relation_type"] for edge in graph["edges"]})
         traversed_layers = sorted({node["layer_id"] for node in graph["nodes"] if node["depth"] == 0})
@@ -257,9 +288,31 @@ class MemoryEngine:
             "max_depth": graph["depth_reached"],
         })
         signature = self._plan_signature(learned_plan)
-        existing = self.repository.candidate_by_signature(signature)
-        if existing:
-            self.repository.reinforce_shortcut_candidate(existing["id"])
+        candidates = self.repository.candidates_by_signature(signature)
+        matched: tuple[float, dict[str, Any]] | None = None
+        for candidate in candidates:
+            stored = self.vectors.fetch("shortcuts", [candidate["id"]], self.embedder.name)
+            prototype = stored.get(candidate["id"])
+            if prototype is None:
+                trigger_vectors = self.embedder.encode(candidate["trigger_examples"])
+                prototype = np.mean(trigger_vectors, axis=0)
+                prototype /= max(float(np.linalg.norm(prototype)), 1e-12)
+                self.vectors.upsert("shortcuts", candidate["id"], prototype, {}, self.embedder.name)
+            similarity = float(prototype @ query_vector)
+            if matched is None or similarity > matched[0]:
+                matched = (similarity, candidate)
+        if matched and matched[0] >= similarity_threshold:
+            existing = matched[1]
+            example_vectors = self.embedder.encode(existing["trigger_examples"])
+            max_example_similarity = max(float(vector @ query_vector) for vector in example_vectors)
+            if max_example_similarity >= novelty_ceiling:
+                return existing["id"]
+            if self.repository.reinforce_shortcut_candidate(existing["id"], question):
+                updated = self.repository.shortcut(existing["id"])
+                trigger_vectors = self.embedder.encode(updated["trigger_examples"])
+                prototype = np.mean(trigger_vectors, axis=0)
+                prototype /= max(float(np.linalg.norm(prototype)), 1e-12)
+                self.vectors.upsert("shortcuts", existing["id"], prototype, {}, self.embedder.name)
             return existing["id"]
         item = ShortcutCreate(
             name=f"Route learned from: {question[:60]}",
@@ -274,27 +327,50 @@ class MemoryEngine:
 
     def query(self, request: QueryRequest) -> dict[str, Any]:
         started = time.perf_counter()
-        shortcut = self.find_shortcut(request.question, request.shortcut_threshold)
+        query_vector = self.embedder.encode([request.question])[0]
+        shortcut = self.find_shortcut(
+            request.question, request.shortcut_threshold, query_vector=query_vector)
+        global_probe: list[dict[str, Any]] | None = None
+        shortcut_attempt_ms = 0.0
+        shortcut_route_succeeded = False
         if shortcut:
             plan = ShortcutPlan.model_validate(shortcut["plan"])
             if request.layer_ids:
                 plan = plan.model_copy(update={"start_layer_ids": request.layer_ids})
             plan = plan.model_copy(update={"max_depth": min(request.max_depth, plan.max_depth)})
             mode = "shortcut_guided"
+            attempt_started = time.perf_counter()
+            global_probe = self.vectors.search(
+                "nodes", query_vector, max(30, request.seed_nodes * 4), self.embedder.name)
+            route_layers = set(plan.start_layer_ids)
+            route_is_plausible = not route_layers or any(
+                hit.get("layer_id") in route_layers for hit in global_probe)
+            if route_is_plausible:
+                graph = self.retrieve(
+                    request.question, plan, query_vector=query_vector,
+                    initial_hits=global_probe, as_of=request.as_of)
+                shortcut_route_succeeded = bool(graph["nodes"])
+            else:
+                graph = {"question": request.question, "nodes": [], "edges": [],
+                         "selected_layers": [], "depth_reached": 0,
+                         "information_gain": [], "stop_reason": "shortcut_precheck_failed"}
+            shortcut_attempt_ms = (time.perf_counter() - attempt_started) * 1000
         else:
             plan = ShortcutPlan(
                 start_layer_ids=request.layer_ids or [], relation_types=request.relation_types or [],
                 max_depth=request.max_depth, breadth=request.breadth, seed_nodes=request.seed_nodes,
             )
             mode = "free_exploration"
-        graph = self.retrieve(request.question, plan)
-        shortcut_route_succeeded = bool(graph["nodes"])
+            graph = self.retrieve(
+                request.question, plan, query_vector=query_vector, as_of=request.as_of)
         if shortcut and not shortcut_route_succeeded:
             plan = ShortcutPlan(
                 start_layer_ids=request.layer_ids or [], relation_types=request.relation_types or [],
                 max_depth=request.max_depth, breadth=request.breadth, seed_nodes=request.seed_nodes,
             )
-            graph = self.retrieve(request.question, plan)
+            graph = self.retrieve(
+                request.question, plan, query_vector=query_vector,
+                initial_hits=global_probe, as_of=request.as_of)
             mode = "shortcut_fallback"
         try:
             answer = self._answer(request.question, graph)
@@ -303,7 +379,8 @@ class MemoryEngine:
             if shortcut:
                 self.repository.record_shortcut_run(
                     shortcut["id"], request.question, shortcut["semantic_similarity"], False,
-                    elapsed_ms, {"depth": graph["depth_reached"], "fallback": not shortcut_route_succeeded})
+                    elapsed_ms, {"depth": graph["depth_reached"], "fallback": True,
+                                 "false_route": True, "wasted_ms": shortcut_attempt_ms})
             self.repository.record_query(
                 question=request.question, mode=mode,
                 shortcut_id=shortcut["id"] if shortcut else None,
@@ -315,12 +392,17 @@ class MemoryEngine:
         elapsed_ms = (time.perf_counter() - started) * 1000
         candidate_id = None
         if request.learn_shortcut and mode in {"free_exploration", "shortcut_fallback"} and graph["nodes"]:
-            candidate_id = self._learn_candidate(request.question, graph, plan)
+            candidate_id = self._learn_candidate(
+                request.question, graph, plan, query_vector, answer,
+                request.shortcut_learning_similarity,
+                request.shortcut_learning_novelty_ceiling)
         if shortcut:
             self.repository.record_shortcut_run(
                 shortcut["id"], request.question, shortcut["semantic_similarity"],
                 shortcut_route_succeeded, elapsed_ms,
-                {"depth": graph["depth_reached"], "fallback": not shortcut_route_succeeded})
+                {"depth": graph["depth_reached"], "fallback": not shortcut_route_succeeded,
+                 "false_route": not shortcut_route_succeeded,
+                 "wasted_ms": shortcut_attempt_ms if not shortcut_route_succeeded else 0.0})
         answer_data = answer.model_dump() if answer else None
         run_id = self.repository.record_query(
             question=request.question, mode=mode, shortcut_id=shortcut["id"] if shortcut else None,
@@ -332,5 +414,11 @@ class MemoryEngine:
             "query_run_id": run_id, "mode": mode,
             "generation_mode": "grounded_answer" if answer else "evidence_only",
             "shortcut": shortcut, "candidate_shortcut_id": candidate_id,
+            "shortcut_diagnostics": {
+                "attempted": bool(shortcut),
+                "false_route": bool(shortcut and not shortcut_route_succeeded),
+                "fallback": mode == "shortcut_fallback",
+                "wasted_ms": round(shortcut_attempt_ms if mode == "shortcut_fallback" else 0.0, 3),
+            },
             "graph": graph, "answer": answer_data, "latency_ms": round(elapsed_ms, 3),
         }

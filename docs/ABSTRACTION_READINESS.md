@@ -16,15 +16,17 @@ $$
 $$
 
 where $N$ is canonical source-node count and $C$ is total source characters. A proposed schema item can then be
-activated only when the same namespaced candidate ID occurs in at least two differently sampled survey rounds:
+activated only when the same namespaced candidate ID occurs in at least two rotating-sample survey rounds:
 
 $$
 \operatorname{activationReady}(x)=\operatorname{sizeReady}\land
 \operatorname{supportRounds}(x)\ge 2.
 $$
 
-The second survey rotates deterministic stratified offsets, so it does not simply reread the identical nodes. An
-approval attempt before recurrence fails closed. `POST /process/abstraction-readiness` exposes the size decision;
+The second survey rotates deterministic stratified offsets, so it does not simply reread the identical nodes.
+However, the rounds use the same model and protocol and are not statistically independent. Recurrence reduces
+sample variance but cannot detect a systematic error inherited from model priors. An approval attempt before
+recurrence fails closed. `POST /process/abstraction-readiness` exposes the size decision;
 discovery records preserve metrics, thresholds, source sample IDs, and survey round.
 
 These values are **configurable Alpha engineering defaults**, not a theorem or universal sample-size claim:
@@ -39,6 +41,11 @@ AEC_SCHEMA_REQUIRED_SURVEYS=2
 Operators should raise the thresholds and number of surveys for heterogeneous, high-risk, multilingual, or
 long-lived corpora. The current recurrence check uses exact namespaced IDs; semantically equivalent renamings need
 human reconciliation rather than silent merging.
+
+Explicit approval is intentionally conservative and is also a scaling bottleneck. The current Alpha implementation
+does not claim that a human can review every proposal in a million-node memory. A scalable governance design must
+add risk tiers, deduplicated batches, sampled audits, and automatic acceptance only for low-risk changes inside an
+already approved schema; novel relation or layer types should remain reviewable.
 
 ## Self-derived and externally supplied knowledge
 

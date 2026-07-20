@@ -1,6 +1,6 @@
 # An Essay Concerning LLM Understanding
 
-*A model-agnostic, domain-extensible multi-layer vector storage and retrieval system with explicit mappings and a peer shortcut layer—its title being a deliberate nod to John Locke.*
+*An embedding-provider-pluggable, domain-extensible multi-layer vector storage and retrieval system with explicit mappings and a peer shortcut layer—its title being a deliberate nod to John Locke.*
 
 [中文说明](README.zh-CN.md) · [Schema discovery](docs/SCHEMA_DISCOVERY.md) · [Abstraction readiness](docs/ABSTRACTION_READINESS.md) · [Research data](research/) · [Scaling study](research/SCALING_STUDY.md) · [Configuration](docs/CONFIGURATION.md) · [Data model and mathematics](docs/DATA_MODEL.md) · [Ontologies](docs/ONTOLOGIES.md)
 
@@ -46,7 +46,7 @@ The repository provides:
 - registries for workspace-defined layer and relation types;
 - bounded graph retrieval with depth, breadth, relation, cycle, and information-gain controls;
 - a parallel procedural-memory layer of retrieval **shortcuts**;
-- shortcut-first routing and candidate-shortcut learning after successful exploration;
+- shortcut-first routing and semantic candidate-shortcut learning after grounded exploration;
 - evidence-only operation when no generation model is configured;
 - replaceable generation, embedding, vector-store, and document-parser boundaries;
 - canonical JSON export independent of the vector index.
@@ -164,7 +164,9 @@ workspace registers namespaced layer and relation types. A company may use `comp
 Openness is governed rather than free-form. Relation definitions declare direction, inverse, symmetry,
 transitivity, temporality, allowed endpoint types, traversal weight, and validators. Mappings may also carry open
 attributes and validity intervals. Models can select an active relation or propose an unknown namespaced type for
-review; an unknown type is never silently persisted. See [Extensible domain ontologies](docs/ONTOLOGIES.md).
+review; an unknown type is never silently persisted. Retrieval currently enforces direction, symmetry, and an
+optional query-time validity point. Transitivity remains registry metadata: this release does not infer or
+materialize transitive closure. See [Extensible domain ontologies](docs/ONTOLOGIES.md).
 
 ## Schema discovery before cleaning
 
@@ -173,8 +175,9 @@ When users do not know the domain structure in advance, material first enters th
 Candidates are compared only with active definitions of the same kind and stored as a pending discovery. Exact matches are reused; possible semantic overlaps require explicit selection; nothing is activated by the survey itself. After approval, schema-guided cleaning validates every target layer, node type, attribute, relation, and source pointer before routing derived units into peer layers. See [Schema discovery](docs/SCHEMA_DISCOVERY.md).
 
 Model-assisted abstraction is allowed only after a configurable corpus-size gate (`N ≥ 12` and either `C ≥ 24,000`
-characters or `N ≥ 50` short records by default). A new candidate must then repeat across two differently sampled
-surveys before activation. These are conservative Alpha defaults, not universal statistical laws. The first input
+characters or `N ≥ 50` short records by default). A new candidate must then recur across two rotating-sample
+surveys before activation. This is a recurrence gate that reduces sampling variance; it is neither independent
+sampling nor a statistical test, and it does not control shared model bias. The first input
 layer is marked as the historical origin, but the marker creates neither a permanent semantic root nor retrieval
 priority. External material gets an auditable placement proposal: same-source continuations may append, independent
 sources or viewpoints default to peer layers, and machine abstractions remain in derived layers. See
@@ -295,8 +298,8 @@ flowchart TB
 
     subgraph A4["D. Shortcut learning — procedural memory"]
         K -->|"a shortcut was attempted"| U["Update its observed success or failure and latency"]
-        K -->|"free or fallback route with non-empty evidence"| L["Candidate shortcut"]
-        L -->|"same internally valid route observed repeatedly; Alpha proxy"| AS["Active shortcut"]
+        K -->|"free or fallback route with grounded citations"| L["Candidate shortcut"]
+        L -->|"same structure + semantically matching distinct questions; Alpha proxy"| AS["Active shortcut"]
         AS -.->|"future similar question"| S
     end
 ```
@@ -348,7 +351,7 @@ Candidate pairs may use only active workspace relations. Direction, endpoint con
 
 A shortcut is stored in its own canonical table and independent `shortcuts` vector namespace, parallel to domain knowledge layers. It stores trigger examples, starting layers, preferred relation types, depth, breadth, stopping criteria, validators, failure conditions, history, and reliability. It does **not** store a canned answer or live only inside an LLM prompt.
 
-Shortcut selection combines semantic trigger similarity with observed reliability and maturity and chooses the highest composite score above the threshold. A high-confidence match constrains retrieval before graph expansion. A partial or untrusted match uses free exploration, and a trusted shortcut that returns no seed evidence falls back within the same query rather than returning an empty answer.
+Shortcut selection combines semantic trigger similarity with observed reliability and maturity and chooses the highest composite score above the threshold. Before graph expansion, the implementation checks whether the route's starting layers occur in a small global candidate probe. A failed precheck skips the guided traversal and reuses that probe for fallback. False-route status and wasted shortcut latency are returned and audited rather than hidden.
 
 ### 10. Guided or free exploration
 
@@ -356,7 +359,7 @@ When a mature shortcut matches, retrieval begins where the learned route recomme
 
 ### 11. Association depth and stopping
 
-The user sets a maximum association depth. Each traversal step may cross into another layer through an explicit mapping. Breadth limits the number of new nodes per step; relation filters limit which edges are legal; visited-node tracking prevents cycles; and low information gain can stop exploration before the maximum depth. Depth is therefore a research budget, not an instruction to wander indefinitely.
+The user sets a maximum association depth. Each traversal step may cross into another layer through an explicit mapping. Breadth limits the number of new nodes per step; relation filters, direction, and an optional `as_of` validity point limit which edges are legal; visited-node tracking prevents cycles; and low information gain can stop exploration before the maximum depth. Information gain is normalized against the current query's initial score distribution rather than a fixed cosine cutoff tied to one embedding model. Depth is therefore a research budget, not an instruction to wander indefinitely.
 
 ### 12. Evidence budgeting and grounded synthesis
 
@@ -364,7 +367,7 @@ The evidence graph is ranked and bounded before it reaches a generation model. W
 
 ### 13. Route observation and shortcut learning
 
-After a free or fallback exploration returns a non-empty, internally consistent evidence graph, the application summarizes the route as a **candidate** shortcut. Similar observed routes reinforce the candidate; the Alpha reference implementation promotes it after three observations. This is a procedural usefulness proxy, not proof that the answer was correct. A mature route records later evidence-producing successes, empty-route failures, and latency; failed guided retrieval falls back to free exploration. Explicit user evaluation, validator execution, and automatic retirement remain future work.
+After free or fallback exploration produces a grounded answer with at least one validated citation, the application summarizes the route as a **candidate** shortcut. Reinforcement requires both the same structural route and a semantically matching, non-duplicate question. Structurally identical but semantically unrelated questions form separate candidates; repeating the same question does not increase maturity. The Alpha reference implementation promotes a candidate after three distinct grounded observations. This is still a procedural usefulness proxy, not proof that every cited claim is true. Evidence-only operation does not automatically learn routes. Explicit user evaluation, general validator execution, and automatic retirement remain future work.
 
 This closes the intended loop:
 
@@ -389,17 +392,17 @@ An accepted mapping is a property-graph edge $e=(u,v,r,c,a,[t_0,t_1])$: register
 
 $$
 S(p \mid q)=s_0(v_0 \mid q)\prod_{j=1}^{k}
-\left(c_{e_j}w_{r_j}\gamma\right),\qquad \gamma=0.88
+\left(c_{e_j}w_{r_j}\gamma\right)
 $$
 
 For a newly reached node, the engine combines its own semantic relevance with the best path score:
 
 $$
-R(v \mid q)=0.6\cos\!\left(f(q),f(v)\right)
-+0.4\max_{p\to v}S(p \mid q)
+R(v \mid q)=\alpha\cos\!\left(f(q),f(v)\right)
++(1-\alpha)\max_{p\to v}S(p \mid q)
 $$
 
-Maximum depth, per-step breadth, relation filters, visited-node cycle control, and minimum information gain bound the search. Association depth is therefore an explicit compute budget.
+`alpha` and `gamma` are route-plan parameters (Alpha defaults `0.6` and `0.88`), not learned constants. To avoid a cosine cutoff coupled to one embedding model, the stopping statistic normalizes newly reached semantic scores by the median-to-maximum range of the initial candidates for the current query. Maximum depth, per-step breadth, relation filters, direction, validity time, visited-node cycle control, and minimum normalized information gain bound the search. Stored node vectors are fetched from the active index during traversal; only a missing index entry triggers re-embedding and repair.
 
 This release implements **typed weighted graph mapping**, not a claimed learned linear transformation $W_{ij}x$ between every pair of vector spaces. Learned projections, contrastive alignment, optimal transport, and graph neural message passing are possible future comparisons, not present capabilities. See [Data model and mathematics](docs/DATA_MODEL.md).
 
@@ -482,7 +485,7 @@ These are hypotheses about useful memory organization. They do not demonstrate c
 
 Hardware cost and local inference time prevented a large controlled study. We especially want to know how the three architectures behave as memory grows from thousands to millions of nodes, and whether a warmed-up shortcut layer eventually repays its learning and routing overhead.
 
-The proposed study specifies logarithmic scale points, cold and warm runs, latency percentiles, throughput, recall, claim coverage, grounding, shortcut false-route rate, information depth, memory use, and hardware disclosure. See [the complete scaling protocol](research/SCALING_STUDY.md) and the [reproducible benchmark entry point](benchmarks/).
+The proposed study specifies logarithmic scale points, cold and warm runs, latency percentiles, throughput, recall, claim coverage, grounding, shortcut false-route rate, information depth, memory use, and hardware disclosure. A separate [falsifiable perspective-preservation protocol](research/PERSPECTIVE_PRESERVATION_BENCHMARK.md) defines conflict, attribution, false reconciliation, temporal validity, and revision metrics against a metadata-aware flat baseline. See [the complete scaling protocol](research/SCALING_STUDY.md) and the [reproducible benchmark entry point](benchmarks/).
 
 Contributions with negative or null results are welcome. A useful outcome is a curve showing *where the architecture stops helping*, not only a demonstration designed to make it win.
 
@@ -492,12 +495,12 @@ Implemented in this open-source package:
 
 - model-free evidence mode;
 - peer layers, nodes, provenance, and mappings;
-- model-independent transformation and ontology-constrained relation protocols;
+- provider-neutral transformation and ontology-constrained relation protocols;
 - extensible layer and relation registries with company and philosophy example packs;
 - pre-cleaning schema discovery, overlap triage, approval, and schema-guided multi-layer routing;
 - depth/breadth/relation/cycle/information-gain traversal controls;
 - shortcut-first routing;
-- candidate shortcut creation, reinforcement, activation, and use history;
+- grounded, semantic candidate-shortcut creation, reinforcement, activation, false-route telemetry, and use history;
 - built-in and optional provider adapters;
 - canonical export and isolated tests.
 
@@ -517,7 +520,7 @@ Important next work:
 - Local databases, vector indexes, uploaded sources, model caches, and `.env` files are ignored by Git.
 - Do not publish copyrighted or confidential inputs merely because their vectors were generated locally.
 - Online generation or embedding providers receive the text sent to their APIs; local operation is required for material that must not leave the machine.
-- A shortcut can reproduce a bad route. Candidate maturity, observed reliability, and fallback exploration reduce this risk but do not eliminate it. Validators and failure conditions are stored as procedural metadata in this Alpha release, but a general policy engine does not yet execute them.
+- A shortcut can reproduce a bad route. Semantic reinforcement, distinct grounded observations, global precheck, false-route telemetry, and fallback reduce this risk but do not eliminate it. Validators and failure conditions beyond grounded-citation validation remain procedural metadata; a general policy engine does not yet execute them.
 - Similarity is not truth, mapping is not identity, and graph depth is not understanding.
 
 Security reports should follow [SECURITY.md](SECURITY.md).

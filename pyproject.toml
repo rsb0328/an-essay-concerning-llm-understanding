@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "an-essay-concerning-llm-understanding"
-version = "0.1.0"
-description = "A model-agnostic multi-layer vector store with extensible domain ontologies and learned retrieval shortcuts."
+version = "0.2.0"
+description = "An embedding-provider-pluggable multi-layer vector store with extensible domain ontologies and learned retrieval shortcuts."
 readme = "README.md"
 requires-python = ">=3.11"
 license = {file = "LICENSE"}

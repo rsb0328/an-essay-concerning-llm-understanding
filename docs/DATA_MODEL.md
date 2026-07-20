@@ -104,20 +104,21 @@ implemented multiplicative propagation rule:
 Suggested mappings remain reviewable canonical records but are excluded from traversal until accepted.
 
 $$
-S(p \mid q)=s_0(v_0 \mid q)\prod_{j=1}^{k}(c_{e_j}\,w_{r_j}\,\gamma),
-\qquad \gamma=0.88
+S(p \mid q)=s_0(v_0 \mid q)\prod_{j=1}^{k}(c_{e_j}\,w_{r_j}\,\gamma)
 $$
 
 For a newly reached node, the reference implementation then combines its own semantic relevance with path
 reliability:
 
 $$
-R(v\mid q)=0.6\cos\!\left(f(q),f(v)\right)+0.4\max_{p\to v}S(p\mid q)
+R(v\mid q)=\alpha\cos\!\left(f(q),f(v)\right)+(1-\alpha)\max_{p\to v}S(p\mid q)
 $$
 
-Search is bounded by maximum depth $D$, per-step breadth $B$, allowed relation types, visited-node cycle
-control, and a minimum information-gain stopping rule. These controls make “association depth” an explicit
-research budget rather than an instruction for unlimited graph wandering.
+`alpha` and `gamma` are configurable route-plan parameters (Alpha defaults `0.6` and `0.88`). Search is bounded by
+maximum depth $D$, per-step breadth $B$, allowed relation types, direction, query-time validity, visited-node cycle
+control, and a minimum information-gain stopping rule. Information gain is normalized against the current query's
+initial candidate-score distribution rather than a fixed cosine cutoff. Traversal fetches already indexed node
+vectors and re-embeds only missing entries. These controls make “association depth” an explicit research budget.
 
 This is currently **typed weighted graph mapping**, not a learned linear transformation $W_{ij}x$ between every
 pair of vector spaces. Future experiments may compare learned alignment matrices, contrastive cross-layer
@@ -127,18 +128,20 @@ about what this release already implements.
 ## Shortcut lifecycle
 
 ```text
-free or failed-shortcut fallback exploration with non-empty evidence
+free or failed-shortcut fallback exploration with grounded citations
   → candidate route in the shortcut layer
-  → same internally valid route observed three times (Alpha proxy)
+  → same structure plus semantically matching distinct questions observed three times (Alpha proxy)
   → active shortcut
   → shortcut-first retrieval on a similar query
   → evidence-producing / empty-route history, with free fallback on an empty route
   → revision or retirement
 ```
 
-The current reference threshold promotes a repeated route after three observations. This is an internal
-procedural-usefulness proxy, not proof that an answer was correct and not a universal cognitive claim. Explicit
-user evaluation, execution of stored validators, and automatic retirement are not yet implemented.
+The current reference threshold promotes a route after three distinct, semantically matching, grounded
+observations. Repeated identical questions do not increase maturity, and structurally identical but semantically
+unrelated routes form separate candidates. This is an internal procedural-usefulness proxy, not proof that an
+answer was correct and not a universal cognitive claim. Explicit user evaluation, execution of general stored
+validators, and automatic retirement are not yet implemented.
 
 ## Portability
 
