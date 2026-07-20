@@ -14,7 +14,10 @@ mappings. See [Extensible domain ontologies](ONTOLOGIES.md).
 | `AEC_LLM_MODEL` | Provider model identifier |
 | `AEC_LLM_API_KEY` | Optional bearer token |
 
-If URL or model is empty, generation is disabled. In that mode, imports, mappings, vector search, graph traversal, shortcut routing, shortcut learning, and evidence output remain available; model-assisted transformation, ontology-constrained classification, and prose answers do not.
+If URL or model is empty, generation is disabled. In that mode, imports, mappings, vector search, graph traversal,
+existing-shortcut routing, and evidence output remain available. Automatic shortcut learning is disabled because
+promotion now requires a generated answer with validated citations; model-assisted transformation,
+ontology-constrained classification, and prose answers are also unavailable.
 
 Pre-cleaning schema discovery and schema-guided cleaning require a generation model because both inspect content
 and return structured proposals or routed units. They are bounded batch operations; sampling and character limits
@@ -32,8 +35,9 @@ AEC_SCHEMA_REQUIRED_SURVEYS=2
 ```
 
 The size rule is `nodes >= MIN_NODES AND (characters >= MIN_CHARS OR nodes >= SHORT_RECORD_NODES)`.
-New candidates must also recur across `REQUIRED_SURVEYS` differently sampled discovery rounds. These are
-configurable Alpha guardrails, not universal statistical guarantees. See
+New candidates must also recur across `REQUIRED_SURVEYS` rotating-sample discovery rounds. This recurrence gate
+reduces sampling variance, but the rounds are not statistically independent and do not control shared model bias.
+These are configurable Alpha guardrails, not a significance test. See
 [Abstraction readiness and material placement](ABSTRACTION_READINESS.md).
 
 ## Embeddings

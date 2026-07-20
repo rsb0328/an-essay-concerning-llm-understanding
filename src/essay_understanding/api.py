@@ -23,7 +23,7 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(
     title="An Essay Concerning LLM Understanding",
-    description="Model-agnostic multi-layer vector storage with extensible domain ontologies and a peer shortcut layer.",
+    description="Embedding-provider-pluggable multi-layer vector storage with extensible domain ontologies and a peer shortcut layer.",
     version="0.1.0",
     lifespan=lifespan,
 )

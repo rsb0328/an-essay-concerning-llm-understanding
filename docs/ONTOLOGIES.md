@@ -24,6 +24,10 @@ Mappings additionally carry confidence, evidence, open attributes, and optional 
 The same mechanism can therefore represent a logical relation, an organizational reporting line, a time-bounded
 ownership record, or a software dependency without forcing every domain into philosophical categories.
 
+Retrieval enforces directional versus symmetric traversal and can filter mappings at a query-supplied `as_of`
+point. Inverse and transitive declarations remain canonical ontology metadata in this Alpha release; the engine
+does not materialize inverse edges or infer a transitive closure.
+
 ## Import a pack
 
 ```bash
@@ -47,7 +51,9 @@ similarity only creates candidates and never decides a domain relation by itself
 The shortcut layer is independent of every domain ontology. It is a peer procedural-memory vector namespace whose
 items describe how to retrieve, not what answer to return. A query searches it first. A reliable match restricts
 starting layers, relation types, depth, breadth, and stopping rules; a miss falls back to ordinary bounded
-multi-layer exploration. A matched route that finds no seed evidence also falls back during the same query. Free or
-fallback explorations with non-empty evidence create or reinforce candidate shortcuts; three observations promote
-the same route in the Alpha implementation. This is an internal proxy for procedural usefulness, not correctness
-feedback.
+multi-layer exploration. A cheap global candidate probe rejects a route whose starting layers are absent and is
+reused by fallback. Free or fallback explorations create candidates only after a generated answer contains a
+validated citation. Reinforcement additionally requires the same structural route and a semantically matching,
+non-duplicate question; three distinct grounded observations promote a candidate in the Alpha implementation.
+False-route status and wasted latency are audited. This remains an internal proxy for procedural usefulness, not
+correctness feedback.

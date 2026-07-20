@@ -461,7 +461,7 @@ class Repository:
                 unstable.append(f"{key} ({support}/{required_surveys} surveys)")
         if unstable:
             raise ValueError(
-                "Schema candidates have not repeated across enough independent surveys: "
+                "Schema candidates have not recurred across enough rotating-sample surveys: "
                 + ", ".join(unstable))
         candidates = [item for key, item in by_key.items() if key in selected]
         selected_layer_types = {item.id for item in candidates if item.kind == "layer_type"}
@@ -563,7 +563,8 @@ class Repository:
             f"""SELECT n.*,l.name layer_name,l.origin_type FROM nodes n
             JOIN layers l ON l.id=n.layer_id WHERE n.id IN ({marks})""", node_ids)
 
-    def mappings_from(self, node_ids: list[str], relation_types: list[str] | None = None) -> list[dict[str, Any]]:
+    def mappings_from(self, node_ids: list[str], relation_types: list[str] | None = None,
+                      as_of: str | None = None) -> list[dict[str, Any]]:
         if not node_ids:
             return []
         marks = ",".join("?" for _ in node_ids)
@@ -573,9 +574,16 @@ class Repository:
             relation_marks = ",".join("?" for _ in relation_types)
             relation_clause = f" AND relation_type IN ({relation_marks})"
             params.extend(relation_types)
+        validity_clause = ""
+        if as_of:
+            validity_clause = " AND (m.valid_from IS NULL OR m.valid_from<=?) AND (m.valid_to IS NULL OR m.valid_to>=?)"
+            params.extend([as_of, as_of])
         return self.rows(
-            f"""SELECT * FROM mappings WHERE status='accepted' AND
-            (source_node_id IN ({marks}) OR target_node_id IN ({marks})){relation_clause}""", params)
+            f"""SELECT m.*,rt.directional,rt.symmetric,rt.transitive,rt.temporal,rt.inverse_type
+            FROM mappings m JOIN relation_types rt ON rt.id=m.relation_type
+            WHERE m.status='accepted' AND
+            (m.source_node_id IN ({marks}) OR m.target_node_id IN ({marks}))
+            {relation_clause}{validity_clause}""", params)
 
     def create_shortcut(self, item: ShortcutCreate, route_signature: str) -> str:
         shortcut_id = str(uuid.uuid4())
@@ -592,11 +600,23 @@ class Repository:
             ))
         return shortcut_id
 
-    def reinforce_shortcut_candidate(self, shortcut_id: str, activation_count: int = 3) -> None:
+    def reinforce_shortcut_candidate(self, shortcut_id: str, trigger_example: str,
+                                     activation_count: int = 3) -> bool:
+        shortcut = self.shortcut(shortcut_id)
+        if not shortcut or shortcut["status"] != "candidate":
+            return False
+        normalized = " ".join(trigger_example.casefold().split())
+        existing = {" ".join(item.casefold().split()) for item in shortcut["trigger_examples"]}
+        if normalized in existing:
+            return False
+        examples = [*shortcut["trigger_examples"], trigger_example]
         with self.connection() as db:
             db.execute("""UPDATE shortcuts SET confirmations=confirmations+1,
+              trigger_examples_json=?,
               status=CASE WHEN confirmations+1>=? THEN 'active' ELSE status END,
-              updated_at=? WHERE id=?""", (activation_count, now(), shortcut_id))
+              updated_at=? WHERE id=?""", (
+                json.dumps(examples, ensure_ascii=False), activation_count, now(), shortcut_id))
+        return True
 
     def decode_shortcut(self, row: dict[str, Any]) -> dict[str, Any]:
         item = dict(row)
@@ -614,12 +634,10 @@ class Repository:
         return [self.decode_shortcut(row) for row in self.rows(
             "SELECT * FROM shortcuts WHERE status='active'")]
 
-    def candidate_by_signature(self, signature: str) -> dict[str, Any] | None:
-        found = self.rows(
-            "SELECT * FROM shortcuts WHERE route_signature=? AND status='candidate' ORDER BY created_at LIMIT 1",
-            (signature,),
-        )
-        return self.decode_shortcut(found[0]) if found else None
+    def candidates_by_signature(self, signature: str) -> list[dict[str, Any]]:
+        return [self.decode_shortcut(row) for row in self.rows(
+            "SELECT * FROM shortcuts WHERE route_signature=? AND status='candidate' ORDER BY created_at",
+            (signature,))]
 
     def record_shortcut_run(self, shortcut_id: str, question: str, similarity: float,
                             success: bool, latency_ms: float, details: dict[str, Any]) -> None:
